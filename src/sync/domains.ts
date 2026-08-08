@@ -5,6 +5,7 @@ import { getSetting, getCfApiSettings } from '../db/client.ts';
 import { fetchThreeNetworkIps } from './ip-sources.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
+import { fetchWithTimeout, fetchWithRetry } from '../util/fetch.ts';
 
 interface DomainRow {
     id: number;
@@ -29,7 +30,7 @@ type LogFn = (msg: string) => void;
 export async function getDnsFromDoh(domain: string, type: string): Promise<string[]> {
     try {
         const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`;
-        const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } });
+        const response = await fetchWithTimeout(url, { headers: { 'accept': 'application/dns-json' } }, 8000);
         if (!response.ok) {
             console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`);
             return [];
@@ -81,7 +82,7 @@ export async function syncScheduledDomains(env: { WUYA: D1Database }): Promise<v
 }
 
 /** 单个域名同步入口 */
-export async function syncSingleDomain(id: number, env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+export async function syncSingleDomain(id: number, env: { WUYA: D1Database }, returnLogs: boolean, signal?: AbortSignal): Promise<Response | void> {
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         const { token, zoneId } = await getCfApiSettings(db);
@@ -96,14 +97,14 @@ export async function syncSingleDomain(id: number, env: { WUYA: D1Database }, re
         await syncDomainLogic(domain, token, zoneId, db, log, syncContext);
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic);
+    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
 
     const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
     await syncLogic(noOpLog);
 }
 
 /** 批量同步全部启用域名 */
-export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: boolean, signal?: AbortSignal): Promise<Response | void> {
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         log("开始批量同步任务...");
@@ -126,14 +127,14 @@ export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: bool
         log("所有目标同步任务执行完毕。");
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic);
+    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
 
     const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
     await syncLogic(noOpLog);
 }
 
 /** 批量同步系统预设域名 */
-export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: boolean, signal?: AbortSignal): Promise<Response | void> {
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         log("开始同步系统预设域名...");
@@ -152,7 +153,7 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
         log("系统域名同步任务执行完毕。");
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic);
+    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
 
     const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
     await syncLogic(noOpLog);
@@ -169,13 +170,15 @@ export async function syncDomainLogic(domain: DomainRow, token: string, zoneId: 
             log(`模式: 系统内置源 (三网优选IP - ${type}, 来源: ${sourceName})`);
             if (!syncContext.threeNetworkIps || (syncContext.threeNetworkIps as { source?: string }).source !== sourceName) {
                 log(`正在从 ${sourceName} 获取三网优选IP...`);
-                syncContext.threeNetworkIps = await fetchThreeNetworkIps(sourceName, log);
-                (syncContext.threeNetworkIps as { source?: string }).source = sourceName;
-                const ips = syncContext.threeNetworkIps as { yd: string[]; dx: string[]; lt: string[] };
-                if (ips && (ips.yd.length > 0 || ips.dx.length > 0 || ips.lt.length > 0)) {
-                    log(`获取成功: 移动(${ips.yd.length}) 电信(${ips.dx.length}) 联通(${ips.lt.length})`);
+                const fetched = await fetchThreeNetworkIps(sourceName, log);
+                const totalCount = fetched.yd.length + fetched.dx.length + fetched.lt.length;
+                if (totalCount > 0) {
+                    // 仅在成功获取 IP 时才缓存（避免失败空对象污染后续同批域名）
+                    syncContext.threeNetworkIps = { ...fetched, source: sourceName };
+                    log(`获取成功: 移动(${fetched.yd.length}) 电信(${fetched.dx.length}) 联通(${fetched.lt.length})`);
                 } else {
-                    log(`未获取到任何三网IP。`);
+                    log(`未获取到任何三网IP，下次同步将重新尝试。`);
+                    delete syncContext.threeNetworkIps;
                 }
             }
             const ips = (syncContext.threeNetworkIps as { [k: string]: string[] })[type] || [];
@@ -268,7 +271,7 @@ export async function updateCloudflareDns(token: string, zoneId: string, domain:
     const headers = { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' };
 
     const listUrl = `${API_ENDPOINT}?name=${target_domain}&per_page=100`;
-    const listResponse = await fetch(listUrl, { headers });
+    const listResponse = await fetchWithRetry(listUrl, { headers }, 1, 15000);
     if (!listResponse.ok) throw new Error(`获取DNS记录列表失败: ${await listResponse.text()}`);
     const listResult = await listResponse.json() as { success: boolean; result: { id: string; type: string; content: string; proxied?: boolean; ttl?: number }[]; errors?: unknown[] };
     if (!listResult.success) throw new Error(`获取DNS记录列表API错误: ${JSON.stringify(listResult.errors)}`);
@@ -310,12 +313,12 @@ export async function updateCloudflareDns(token: string, zoneId: string, domain:
 
     const deleteFn = (record: { id: string; type: string; content: string }) => {
         log(`- 准备删除旧记录: [${record.type}] ${record.content}`);
-        return fetch(`${API_ENDPOINT}/${record.id}`, { method: 'DELETE', headers });
+        return fetchWithRetry(`${API_ENDPOINT}/${record.id}`, { method: 'DELETE', headers }, 1, 15000);
     };
 
     const addFn = (record: DnsRecord) => {
         log(`+ 准备添加新记录: [${record.type}] ${record.content}`);
-        return fetch(API_ENDPOINT, { method: 'POST', headers, body: JSON.stringify({ type: record.type, name: target_domain, content: record.content, ttl, proxied: false }) });
+        return fetchWithRetry(API_ENDPOINT, { method: 'POST', headers, body: JSON.stringify({ type: record.type, name: target_domain, content: record.content, ttl, proxied: false }) }, 1, 15000);
     };
 
     const deleteResponses = await processInChunks(recordsToDelete, API_CHUNK_SIZE, deleteFn, log);
