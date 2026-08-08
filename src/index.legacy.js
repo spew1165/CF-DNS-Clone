@@ -1,3 +1,12 @@
+// 阶段 C：工具层与 DB 层已拆分为独立模块，以下函数从这些模块导入
+import { initializeAndMigrateDatabase, ensureInitialData } from './db/migrations.ts';
+import { getSetting, setSetting, getFullSettings, getCfApiSettings, getGitHubSettings } from './db/client.ts';
+import { hashPassword, isAuthenticated, getCookie } from './util/auth.ts';
+import { jsonResponse } from './util/http.ts';
+import { beijingTimeLog } from './util/log.ts';
+import { createLogStreamResponse } from './util/sse.ts';
+import { getZoneName } from './util/cf.ts';
+
 export default {
   async fetch(request, env, ctx) {
       try {
@@ -120,156 +129,9 @@ async function syncScheduledIpSources(env) {
     }
 }
 
-async function initializeAndMigrateDatabase(env) {
-  if (!env.WUYA) {
-      throw new Error("D1 database binding 'WUYA' not found. Please configure it in your Worker settings.");
-  }
-  const db = env.WUYA;
-  const expectedSchemas = {
-      settings: ['key TEXT PRIMARY KEY NOT NULL', 'value TEXT NOT NULL'],
-      domains: [
-          'id INTEGER PRIMARY KEY AUTOINCREMENT',
-          'source_domain TEXT NOT NULL',
-          'target_domain TEXT NOT NULL',
-          'zone_id TEXT NOT NULL',
-          'is_deep_resolve INTEGER NOT NULL DEFAULT 1',
-          'ttl INTEGER NOT NULL DEFAULT 60',
-          'notes TEXT',
-          'last_synced_records TEXT DEFAULT \'[]\'',
-          'last_synced_time TIMESTAMP',
-          'last_sync_status TEXT DEFAULT \'pending\'',
-          'last_sync_error TEXT',
-          'is_enabled INTEGER DEFAULT 1 NOT NULL',
-          'is_system INTEGER NOT NULL DEFAULT 0',
-          'UNIQUE(target_domain)'
-      ],
-      sessions: ['token TEXT PRIMARY KEY NOT NULL', 'expires_at TIMESTAMP NOT NULL'],
-      ip_sources: [
-          'id INTEGER PRIMARY KEY AUTOINCREMENT',
-          'url TEXT NOT NULL UNIQUE',
-          'github_path TEXT NOT NULL UNIQUE',
-          'commit_message TEXT NOT NULL',
-          'fetch_strategy TEXT',
-          'last_synced_time TIMESTAMP',
-          'last_sync_status TEXT DEFAULT \'pending\'',
-          'last_sync_error TEXT',
-          'is_enabled INTEGER DEFAULT 1 NOT NULL'
-      ]
-  };
+// 数据库初始化与迁移已移至 ./db/migrations.ts
 
-  const createStmts = Object.keys(expectedSchemas).map(tableName =>
-      db.prepare(`CREATE TABLE IF NOT EXISTS ${tableName} (${expectedSchemas[tableName].join(', ')});`)
-  );
-  await db.batch(createStmts);
-
-  for (const tableName in expectedSchemas) {
-      const { results: existingColumns } = await db.prepare(`PRAGMA table_info(${tableName})`).all();
-      const existingColumnNames = existingColumns.map(c => c.name);
-      const expectedColumnDefs = expectedSchemas[tableName].filter(def => !def.startsWith('UNIQUE'));
-
-      for (const columnDef of expectedColumnDefs) {
-          const columnName = columnDef.split(' ')[0];
-          if (!existingColumnNames.includes(columnName)) {
-              try {
-                  await db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnDef}`).run();
-              } catch (e) { console.error(`Failed to add column '${columnName}' to '${tableName}':`, e.message); }
-          }
-      }
-  }
-  
-  const { token, zoneId } = await getCfApiSettings(db);
-  if (!token || !zoneId) return;
-
-  const { results: invalidDomains } = await db.prepare("SELECT id, target_domain FROM domains WHERE target_domain LIKE '%.'").all();
-  if (invalidDomains.length > 0) {
-      try {
-          const zoneName = (await getZoneName(token, zoneId)).replace(/\.$/, '');
-          const fixStmts = [];
-          for (const domain of invalidDomains) {
-              const prefix = domain.target_domain.replace(/\.$/, '');
-              const correctedDomain = (prefix === '' || prefix === '@') ? zoneName : `${prefix}.${zoneName}`;
-              fixStmts.push(db.prepare("UPDATE domains SET target_domain = ? WHERE id = ?").bind(correctedDomain, domain.id));
-          }
-          await db.batch(fixStmts);
-      } catch (e) { console.error("Failed to fix invalid domain entries:", e.message); }
-  }
-}
-
-async function ensureInitialData(db, zoneId, zoneName) {
-    if (!zoneId || !zoneName) return;
-    
-    await setSetting(db, 'THREE_NETWORK_SOURCE', await getSetting(db, 'THREE_NETWORK_SOURCE') || 'CloudFlareYes');
-
-    const initialIpSources = [
-        { url: 'https://ipdb.api.030101.xyz/?type=bestcf&country=true', path: '030101-bestcf.txt', msg: 'Update BestCF IPs from 030101.xyz', strategy: 'phantomjs_cloud' },
-        { url: 'https://ipdb.api.030101.xyz/?type=bestproxy&country=true', path: '030101-bestproxy.txt', msg: 'Update BestProxy IPs from 030101.xyz', strategy: 'phantomjs_cloud' },
-        { url: 'https://ip.164746.xyz', path: '164746.txt', msg: 'Update IPs from 164746.xyz', strategy: 'direct_regex' },
-        { url: 'https://stock.hostmonit.com/CloudFlareYes', path: 'CloudFlareYes.txt', msg: 'Update CloudFlareYes IPs', strategy: 'phantomjs_cloud' },
-        { url: 'https://ip.haogege.xyz', path: 'haogege.txt', msg: 'Update IPs from haogege.xyz', strategy: 'direct_regex' },
-        { url: 'https://api.uouin.com/cloudflare.html', path: 'uouin-cloudflare.txt', msg: 'Update IPs from uouin.com', strategy: 'direct_regex' },
-        { url: 'https://www.wetest.vip/page/cloudflare/address_v4.html', path: 'wetest-cloudflare-v4.txt', msg: 'Update Cloudflare v4 IPs from wetest.vip', strategy: 'direct_regex' },
-        { url: 'https://www.wetest.vip/page/edgeone/address_v4.html', path: 'wetest-edgeone-v4.txt', msg: 'Update EdgeOne v4 IPs from wetest.vip', strategy: 'direct_regex' },
-    ];
-    const ipSourceStmts = initialIpSources.map(s => 
-        db.prepare('INSERT INTO ip_sources (url, github_path, commit_message, fetch_strategy) VALUES (?, ?, ?, ?) ON CONFLICT(url) DO NOTHING')
-          .bind(s.url, s.path, s.msg, s.strategy)
-    );
-    
-    const initialDomains = [
-        { source: 'internal:hostmonit:yd', prefix: 'yd', notes: '移动', is_system: 1, deep_resolve: 1 },
-        { source: 'internal:hostmonit:dx', prefix: 'dx', notes: '电信', is_system: 1, deep_resolve: 1 },
-        { source: 'internal:hostmonit:lt', prefix: 'lt', notes: '联通', is_system: 1, deep_resolve: 1 },
-        { source: 'snipaste1.speedip.eu.org', prefix: 'bp1', notes: 'bp1', is_system: 0, deep_resolve: 1 },
-        { source: 'snipaste2.speedip.eu.org', prefix: 'bp2', notes: 'bp2', is_system: 0, deep_resolve: 1 },
-        { source: 'snipaste3.speedip.eu.org', prefix: 'bp3', notes: 'bp3', is_system: 0, deep_resolve: 1 },
-        { source: 'snipaste4.speedip.eu.org', prefix: 'bp4', notes: 'bp4', is_system: 0, deep_resolve: 1 },
-        { source: 'snipaste5.speedip.eu.org', prefix: 'bp5', notes: 'bp5', is_system: 0, deep_resolve: 1 },
-        { source: 'cf.090227.xyz', prefix: 'cm', notes: 'cm', is_system: 0, deep_resolve: 1 },
-        { source: 'cf.877774.xyz', prefix: 'qms', notes: 'qms', is_system: 0, deep_resolve: 1 },
-    ];
-    const domainStmts = initialDomains.map(d => {
-        const targetDomain = d.prefix === '@' ? zoneName : `${d.prefix}.${zoneName}`;
-        return db.prepare('INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, notes, is_system) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(target_domain) DO NOTHING')
-                 .bind(d.source, targetDomain, zoneId, d.deep_resolve, d.notes, d.is_system);
-    });
-
-    await db.batch([...ipSourceStmts, ...domainStmts]);
-}
-
-async function getSetting(db, key) { return db.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first("value"); }
-async function setSetting(db, key, value) { 
-    if (value === undefined || value === null) {
-        await db.prepare("DELETE FROM settings WHERE key = ?").bind(key).run();
-    } else {
-        await db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, value).run();
-    }
-}
-
-async function getFullSettings(db) {
-    const { results } = await db.prepare("SELECT key, value FROM settings").all();
-    const settings = {};
-    for (const row of results) {
-        settings[row.key] = row.value;
-    }
-    return settings;
-}
-
-async function getCfApiSettings(db) {
-  const [token, zoneId] = await Promise.all([
-      getSetting(db, 'CF_API_TOKEN'),
-      getSetting(db, 'CF_ZONE_ID'),
-  ]);
-  return { token: token || '', zoneId: zoneId || '' };
-}
-
-async function getGitHubSettings(db) {
-    const [token, owner, repo] = await Promise.all([
-        getSetting(db, 'GITHUB_TOKEN'),
-        getSetting(db, 'GITHUB_OWNER'),
-        getSetting(db, 'GITHUB_REPO'),
-    ]);
-    return { token, owner, repo };
-}
+// settings 读写与 Cloudflare/GitHub 凭据读取已移至 ./db/client.ts
 
 async function handleApiRequest(request, env) {
   const url = new URL(request.url);
@@ -439,8 +301,8 @@ async function handleDomainMutation(request, db, isUpdate = false, id = null) {
 async function apiAddDomain(request, db) { return handleDomainMutation(request, db, false); }
 async function apiUpdateDomain(request, db, id) { return handleDomainMutation(request, db, true, id); }
 async function apiDeleteDomain(request, db, id) {
-    const { changes } = await db.prepare('DELETE FROM domains WHERE id = ? AND is_system = 0').bind(id).run();
-    if (changes === 0) {
+    const { meta } = await db.prepare('DELETE FROM domains WHERE id = ? AND is_system = 0').bind(id).run();
+    if (meta.changes === 0) {
         return jsonResponse({ error: "删除失败，目标为系统预设或不存在。" }, 403);
     }
     return jsonResponse({ success: true, message: "目标删除成功。" });
@@ -1447,36 +1309,9 @@ async function updateFileOnGitHub({ token, owner, repo, path, content, message, 
     await githubApiRequest(apiUrl, token, { method: 'PUT', body });
 }
 
-function createLogStreamResponse(logFunction) {
-    const { readable, writable } = new TransformStream();
-    const writer = writable.getWriter();
-    const encoder = new TextEncoder();
-    const log = (message) => {
-        const logMsg = beijingTimeLog(message);
-        try {
-            writer.write(encoder.encode(`data: ${logMsg}\n\n`));
-        } catch(e) {
-            console.error("Failed to write to stream:", e);
-        }
-    };
+// 尾部工具函数（createLogStreamResponse / getZoneName / hashPassword / isAuthenticated / getCookie / jsonResponse / beijingTimeLog）已移至 src/util/ 与 src/db/
 
-    (async () => {
-        try {
-            await logFunction(log);
-        } catch (e) {
-            log(`[FATAL_ERROR] ${e.message}`);
-            console.error("Streaming log function error:", e.stack);
-        } finally {
-            try {
-                await writer.close();
-            } catch (e) {}
-        }
-    })();
-
-    return new Response(readable, {
-        headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' }
-    });
-}
+async function getDnsFromDoh(domain, type) { try { const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`; const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } }); if (!response.ok) { console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`); return []; } const data = await response.json(); return data.Answer ? data.Answer.map(ans => ans.data).filter(Boolean) : []; } catch (e) { console.error(`DoH query error for ${domain} (${type}): ${e.message}`); return []; } }
 
 async function syncSingleIpSource(id, env, returnLogs) {
     const db = env.WUYA;
@@ -1831,22 +1666,6 @@ async function updateCloudflareDns(token, zoneId, domain, newRecords, log) {
   }
   return 'success';
 }
-
-async function getZoneName(token, zoneId) {
-  if (!token || !zoneId) throw new Error("API 令牌和区域 ID 不能为空。");
-  const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}`, { headers: { 'Authorization': `Bearer ${token}` } });
-  if (!response.ok) { const errText = await response.text(); throw new Error(`无法从 Cloudflare 获取区域信息: ${errText}`); }
-  const data = await response.json();
-  if (!data.success) throw new Error(`Cloudflare API 返回错误: ${JSON.stringify(data.errors)}`);
-  return data.result.name;
-}
-
-async function hashPassword(password, salt) { const data = new TextEncoder().encode(password + salt); const hashBuffer = await crypto.subtle.digest('SHA-256', data); return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, '0')).join(''); }
-async function isAuthenticated(request, db) { const token = getCookie(request, 'session'); if (!token) return false; const session = await db.prepare("SELECT expires_at FROM sessions WHERE token = ?").bind(token).first(); if (!session || new Date(session.expires_at) < new Date()) { if (session) await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run(); return false; } return true; }
-function getCookie(request, name) { const cookieHeader = request.headers.get('Cookie'); if (cookieHeader) for (let cookie of cookieHeader.split(';')) { const [key, value] = cookie.trim().split('='); if (key === name) return value; } return null; }
-function jsonResponse(data, status = 200, headers = {}) { return new Response(JSON.stringify(data, null, 2), { status, headers: { 'Content-Type': 'application/json;charset=UTF-8', ...headers } }); }
-const beijingTimeLog = (message) => `[${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}] ${message}`;
-async function getDnsFromDoh(domain, type) { try { const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`; const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } }); if (!response.ok) { console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`); return []; } const data = await response.json(); return data.Answer ? data.Answer.map(ans => ans.data).filter(Boolean) : []; } catch (e) { console.error(`DoH query error for ${domain} (${type}): ${e.message}`); return []; } }
 
 async function fetchThreeNetworkIps(source, log) {
     log(`正在从源 [${source}] 获取IP...`);

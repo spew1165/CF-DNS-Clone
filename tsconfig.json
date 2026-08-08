@@ -12,6 +12,7 @@
         "noEmit": true,
         "isolatedModules": true,
         "resolveJsonModule": true,
+        "allowImportingTsExtensions": true,
         "types": []
     },
     "include": ["src/**/*.ts", "src/**/*.js", "worker-configuration.d.ts"],
