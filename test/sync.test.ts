@@ -1,8 +1,9 @@
-// sync.test.ts — 用例 3/4：域名同步写回 D1 + IP 源多源回退
+// sync.test.ts — 用例 3/4：域名同步写回 D1 + IP 源多源回退 + 禁用源守卫
 // 覆盖 plan v2 用例表：#3 syncDomainRecord 写回 D1、#4 fetchIpSource 多源回退
+// 覆盖 fix-plan：#6 syncSingleIpSource 禁用源跳过
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchIpsFromSource, FETCH_STRATEGIES } from "../src/sync/ip-sources.ts";
+import { fetchIpsFromSource, syncSingleIpSource, FETCH_STRATEGIES } from "../src/sync/ip-sources.ts";
 import { syncDomainLogic } from "../src/sync/domains.ts";
 
 afterEach(() => {
@@ -84,5 +85,30 @@ describe("syncDomainLogic writes back to D1", () => {
         // 验证 POST 调用了 Cloudflare API 新增记录
         const postCalls = fetchMock.mock.calls.filter((c) => c[0].includes("api.cloudflare.com") && c[1]?.method === "POST");
         expect(postCalls.length).toBe(1);
+    });
+});
+
+describe("syncSingleIpSource (Task 2.1 is_enabled 守卫)", () => {
+    it("throws when source is disabled", async () => {
+        // 使用随机唯一 path 避免与 ensureInitialData 种子冲突
+        const uniquePath = `disabled-${crypto.randomUUID()}.txt`;
+        await env.WUYA.prepare(
+            "INSERT INTO ip_sources (url, github_path, commit_message, fetch_strategy, is_enabled) VALUES (?, ?, ?, ?, 0)"
+        ).bind("https://disabled.example.com/ips.txt", uniquePath, "update", "direct_regex").run();
+        const row = await env.WUYA.prepare(
+            "SELECT id FROM ip_sources WHERE github_path = ?"
+        ).bind(uniquePath).first() as { id: number };
+
+        // mock fetch：不应被调用（守卫应先抛错）
+        const fetchSpy = vi.fn(async () => new Response("5.5.5.5", { status: 200 }));
+        vi.stubGlobal("fetch", fetchSpy);
+
+        await expect(syncSingleIpSource(row.id, env, false)).rejects.toThrow(/已被禁用/);
+        // 确认 fetch 未被调用（GitHub API 完全跳过）
+        expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("throws when source id does not exist", async () => {
+        await expect(syncSingleIpSource(999999, env, false)).rejects.toThrow(/未找到|已被禁用/);
     });
 });
