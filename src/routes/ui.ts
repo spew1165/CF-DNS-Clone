@@ -6,8 +6,8 @@ import { getSetting, getFullSettings, getCfApiSettings } from '../db/client.ts';
 import { ensureInitialData } from '../db/migrations.ts';
 import { isAuthenticated } from '../util/auth.ts';
 import { getZoneName } from '../util/cf.ts';
-// UI 模板函数从 legacy 导入（阶段 E 前的中转）
-import { getHtmlLayout, getSetupPage, getPublicHomepage, getDashboardPage } from '../index.legacy.js';
+// UI 模板函数从 templates.js 导入
+import { getHtmlLayout, getSetupPage, getPublicHomepage, getDashboardPage } from '../ui/templates.js';
 
 /** UI 路由分发：/admin 仪表盘 / 首页 / 初始化引导 */
 export async function handleUiRequest(request: Request, env: { WUYA: D1Database }): Promise<Response> {

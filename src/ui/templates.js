@@ -1,71 +1,7 @@
-// 阶段 D：路由层已拆分，fetch/scheduled 分发到新模块
-import { initializeAndMigrateDatabase } from './db/migrations.ts';
-import { getSetting, setSetting } from './db/client.ts';
-import { jsonResponse } from './util/http.ts';
-import { syncScheduledIpSources } from './sync/ip-sources.ts';
-import { syncScheduledDomains } from './sync/domains.ts';
-import { handleApiRequest } from './routes/api.ts';
-import { handleGitHubFileProxy } from './routes/github-proxy.ts';
-import { handleUiRequest } from './routes/ui.ts';
+// templates.js — UI 模板函数（阶段 E 从 index.legacy.js 拆出）
+// 纯 JS 文件（tsc 不参与）：内含大量浏览器端 JS 模板字符串
 
-export default {
-  async fetch(request, env, ctx) {
-      try {
-        await initializeAndMigrateDatabase(env);
-      } catch (e) {
-        console.error("Database initialization failed:", e.stack);
-        return new Response("严重错误：数据库初始化失败，请检查Worker的D1数据库绑定是否正确配置为'WUYA'。", { status: 500 });
-      }
-
-      const url = new URL(request.url);
-      const path = url.pathname;
-      try {
-          if (path.startsWith('/api/')) {
-              return await handleApiRequest(request, env);
-          }
-          if (path.length > 1 && !path.startsWith('/api/') && !['/login', '/admin'].includes(path)) {
-              const fileName = path.substring(1);
-              return await handleGitHubFileProxy(fileName, env, ctx);
-          }
-          return await handleUiRequest(request, env);
-      } catch (e) {
-          console.error("Global Catch:", e.stack);
-          const errorResponse = { error: "发生意外的服务器错误。", details: e.message };
-          const status = e.status || 500;
-          if (path.startsWith('/api/')) {
-              return jsonResponse(errorResponse, status);
-          }
-          return new Response(`错误: ${e.message}\n${e.stack}`, { status });
-      }
-  },
-  async scheduled(controller, env, ctx) {
-      console.log("Scheduled task started: Initializing...");
-      await initializeAndMigrateDatabase(env);
-
-      const db = env.WUYA;
-      const nextTask = await getSetting(db, 'next_sync_task') || 'domains';
-
-      if (nextTask === 'domains') {
-          console.log("Scheduled task: Syncing a batch of DNS records (failure-first)...");
-          await syncScheduledDomains(env);
-          await setSetting(db, 'next_sync_task', 'ip_sources');
-      } else {
-          console.log("Scheduled task: Syncing a batch of IP sources to GitHub (failure-first)...");
-          await syncScheduledIpSources(env);
-          await setSetting(db, 'next_sync_task', 'domains');
-      }
-
-      console.log("Scheduled task for this cycle finished.");
-  },
-};
-
-// syncScheduledDomains / syncScheduledIpSources 已移至 ./sync/
-
-// UI 模板函数（阶段 E 拆到 src/ui/templates.js 前，先在此 export 供 routes/ui.ts 使用）
-export { getHtmlLayout, getSetupPage, getPublicHomepage, getDashboardPage };
-
-
-function getHtmlLayout(title, content) { return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"><style>
+export function getHtmlLayout(title, content) { return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"><style>
 :root {
     --sidebar-width: 250px;
     --pico-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -277,9 +213,9 @@ legend { font-size: 1.25rem; font-weight: 600; padding: 0 .5rem; }
 }
 </style></head><body><main class="container">${content}</main><div id="notifications" class="notifications"></div></body></html>`; }
 
-function getSetupPage() { return `<div class="auth-container"><article id="setupForm"><h1>系统初始化</h1><p>请设置一个安全的管理员密码以保护您的应用。</p><form><label for="password">管理员密码 (最少8位)</label><input type="password" id="password" required minlength="8"><button type="submit">设置密码</button></form><p id="error-msg" style="color:red"></p></article></div><script>document.querySelector('#setupForm form').addEventListener('submit',async function(e){e.preventDefault();const password=document.getElementById('password').value;document.getElementById('error-msg').textContent='';try{const res=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});if(!res.ok){const err=await res.json();throw new Error(err.error||'设置失败')}alert('设置成功，页面即将刷新...');setTimeout(()=>window.location.reload(),1000)}catch(e){document.getElementById('error-msg').textContent=e.message}});</script>`;}
+export function getSetupPage() { return `<div class="auth-container"><article id="setupForm"><h1>系统初始化</h1><p>请设置一个安全的管理员密码以保护您的应用。</p><form><label for="password">管理员密码 (最少8位)</label><input type="password" id="password" required minlength="8"><button type="submit">设置密码</button></form><p id="error-msg" style="color:red"></p></article></div><script>document.querySelector('#setupForm form').addEventListener('submit',async function(e){e.preventDefault();const password=document.getElementById('password').value;document.getElementById('error-msg').textContent='';try{const res=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});if(!res.ok){const err=await res.json();throw new Error(err.error||'设置失败')}alert('设置成功，页面即将刷新...');setTimeout(()=>window.location.reload(),1000)}catch(e){document.getElementById('error-msg').textContent=e.message}});</script>`;}
 
-function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSourceName, loggedIn) {
+export function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSourceName, loggedIn) {
     const origin = new URL(requestUrl).origin;
     const formatTime = (isoStr) => {
         if (!isoStr) return 'N/A';
@@ -453,7 +389,7 @@ function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSourceNam
     </script>
     `;
 }
-function getDashboardPage(domains, ipSources, settings) { 
+export function getDashboardPage(domains, ipSources, settings) { 
     const githubSettingsComplete = settings.GITHUB_TOKEN && settings.GITHUB_OWNER && settings.GITHUB_REPO;
     return `<aside class="sidebar"><div class="sidebar-header"><h3>DNS Clone</h3></div><nav class="sidebar-nav"><a href="#page-dns-clone" class="nav-link active" data-target="page-dns-clone"><i class="fa-solid fa-clone fa-fw"></i> 域名克隆</a><a href="#page-github-upload" class="nav-link" data-target="page-github-upload"><i class="fa-brands fa-github fa-fw"></i> GitHub 上传</a><a href="#page-settings" class="nav-link" data-target="page-settings"><i class="fa-solid fa-gear fa-fw"></i> 系统设置</a></nav></aside>
     <div class="main-content">
