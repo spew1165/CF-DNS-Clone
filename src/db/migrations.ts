@@ -57,11 +57,8 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
         for (const columnDef of expectedColumnDefs) {
             const columnName = columnDef.split(' ')[0];
             if (!existingColumnNames.includes(columnName)) {
-                try {
-                    await db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnDef}`).run();
-                } catch (e) {
-                    console.error(`Failed to add column '${columnName}' to '${tableName}':`, e instanceof Error ? e.message : e);
-                }
+                // 显式抛错：迁移失败不可被吞，避免业务 SQL 运行时才暴露列缺失
+                await db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnDef}`).run();
             }
         }
     }
