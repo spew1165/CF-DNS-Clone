@@ -5,8 +5,7 @@ import { getGitHubSettings } from '../db/client.ts';
 import { getCurrentGitHubContent, updateFileOnGitHub } from './github.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
-
-// 注意：dummy_strategy_4~30 为原文件既有代码（疑似测试残留），按"不删预存代码"原则原样保留
+import { fetchWithTimeout } from '../util/fetch.ts';
 
 interface IpSourceRow {
     id: number;
@@ -14,6 +13,7 @@ interface IpSourceRow {
     github_path: string;
     commit_message: string;
     fetch_strategy: string;
+    is_enabled: number;
 }
 
 type StrategyFn = (url: string) => Promise<string[]>;
@@ -21,18 +21,18 @@ type StrategyFn = (url: string) => Promise<string[]>;
 /** 抓取策略表 */
 export const FETCH_STRATEGIES: Record<string, StrategyFn> = {
     direct_regex: async (url) => {
-        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 15000);
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
         const text = await res.text();
         const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
         return [...new Set(ips)];
     },
     phantomjs_cloud: async (url) => {
-        const res = await fetch('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
+        const res = await fetchWithTimeout('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url, renderType: 'html' })
-        });
+        }, 20000);
         if (!res.ok) throw new Error(`PhantomJsCloud API error ${res.status}`);
         const text = await res.text();
         const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
@@ -40,21 +40,13 @@ export const FETCH_STRATEGIES: Record<string, StrategyFn> = {
     },
     proxy_codetabs: async (url) => {
         const proxyUrl = 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url);
-        const res = await fetch(proxyUrl);
+        const res = await fetchWithTimeout(proxyUrl, {}, 15000);
         if (!res.ok) throw new Error(`CodeTabs Proxy error ${res.status}`);
         const text = await res.text();
         const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
         return [...new Set(ips)];
     },
 };
-for (let i = 4; i <= 30; i++) {
-    FETCH_STRATEGIES[`dummy_strategy_${i}`] = async (url) => {
-        if (url.includes("special-case")) {
-            return ["1.2.3." + i];
-        }
-        throw new Error("Dummy strategy failed");
-    };
-}
 
 type LogFn = (msg: string) => void;
 
@@ -94,7 +86,7 @@ export async function syncScheduledIpSources(env: { WUYA: D1Database }): Promise
 }
 
 /** 单个 IP 源同步入口 */
-export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, returnLogs: boolean, signal?: AbortSignal): Promise<Response | void> {
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         const githubSettings = await getGitHubSettings(db);
@@ -102,8 +94,8 @@ export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, 
             throw new Error("GitHub API设置不完整。");
         }
         const gh = githubSettings as { token: string; owner: string; repo: string };
-        const source = await db.prepare("SELECT * FROM ip_sources WHERE id = ?").bind(id).first() as IpSourceRow | null;
-        if (!source) throw new Error(`未找到ID为 ${id} 的IP源。`);
+        const source = await db.prepare("SELECT * FROM ip_sources WHERE id = ? AND is_enabled = 1").bind(id).first() as IpSourceRow | null;
+        if (!source) throw new Error(`未找到ID为 ${id} 的IP源或该源已被禁用。`);
 
         log(`======== 开始同步IP源: ${source.url} ========`);
 
@@ -132,14 +124,14 @@ export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, 
         }
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic);
+    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
 
     const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
     await syncLogic(noOpLog);
 }
 
 /** 批量同步全部启用 IP 源 */
-export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: boolean, signal?: AbortSignal): Promise<Response | void> {
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         log("开始批量同步IP源...");
@@ -154,7 +146,7 @@ export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: bo
         log("所有IP源同步任务执行完毕。");
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic);
+    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
 
     const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
     await syncLogic(noOpLog);
@@ -236,12 +228,12 @@ export async function fetchThreeNetworkIps(source: string, log: (msg: string) =>
         }
 
         const res = usePhantom
-            ? await fetch('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
+            ? await fetchWithTimeout('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ url, renderType: 'html' })
-              })
-            : await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+              }, 20000)
+            : await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 15000);
         if (!res.ok) throw new Error(`HTTP error ${res.status}`);
 
         const htmlContent = await res.text();
