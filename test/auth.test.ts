@@ -1,13 +1,13 @@
-// auth.test.ts — 用例 7/8：hashPassword + isAuthenticated
+// auth.test.ts — 用例 7/8：hashPassword + isAuthenticated + verifyPassword（legacy 兼容）
 // 中文注释；断言文案用英文（文案三档规则）
 import { env } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
-import { hashPassword, isAuthenticated } from "../src/util/auth.ts";
+import { hashPassword, isAuthenticated, legacyHashPassword, verifyPassword } from "../src/util/auth.ts";
 
-describe("hashPassword", () => {
-    it("returns a hex string of 64 chars", async () => {
+describe("hashPassword (PBKDF2)", () => {
+    it("returns a prefixed string containing salt and hex", async () => {
         const hash = await hashPassword("test-password-123", "test-salt");
-        expect(hash).toMatch(/^[0-9a-f]{64}$/);
+        expect(hash).toMatch(/^pbkdf2\$100000\$test-salt\$[0-9a-f]{64}$/);
     });
 
     it("produces different hashes for different salts", async () => {
@@ -20,6 +20,35 @@ describe("hashPassword", () => {
         const hash = await hashPassword("test-password-123", "test-salt");
         const tampered = hash.slice(0, -2) + (hash.endsWith("00") ? "ff" : "00");
         expect(tampered).not.toBe(hash);
+    });
+});
+
+describe("verifyPassword (multi-format)", () => {
+    it("accepts PBKDF2 format and returns no upgrade hash", async () => {
+        const hash = await hashPassword("test-password-123", "test-salt");
+        const result = await verifyPassword("test-password-123", hash, "test-salt");
+        expect(result.matched).toBe(true);
+        expect(result.upgradedHash).toBeUndefined();
+    });
+
+    it("accepts legacy raw$ SHA-256 format and returns upgraded hash", async () => {
+        const legacySalt = "old-salt";
+        const legacyHash = await legacyHashPassword("test-password-123", legacySalt);
+        const result = await verifyPassword("test-password-123", legacyHash, legacySalt);
+        expect(result.matched).toBe(true);
+        expect(result.upgradedHash).toMatch(/^pbkdf2\$100000\$/);
+    });
+
+    it("rejects wrong password for PBKDF2", async () => {
+        const hash = await hashPassword("correct", "test-salt");
+        const result = await verifyPassword("wrong", hash, "test-salt");
+        expect(result.matched).toBe(false);
+    });
+
+    it("rejects wrong password for legacy", async () => {
+        const legacyHash = await legacyHashPassword("correct", "old-salt");
+        const result = await verifyPassword("wrong", legacyHash, "old-salt");
+        expect(result.matched).toBe(false);
     });
 });
 
