@@ -4,11 +4,36 @@
 import { getSetting, setSetting, getFullSettings, getCfApiSettings } from '../db/client.ts';
 import { ensureInitialData } from '../db/migrations.ts';
 import { jsonResponse } from '../util/http.ts';
-import { hashPassword, isAuthenticated } from '../util/auth.ts';
+import { hashPassword, isAuthenticated, verifyPassword } from '../util/auth.ts';
 import { getZoneName } from '../util/cf.ts';
 import { FETCH_STRATEGIES } from '../sync/ip-sources.ts';
 import { syncAllDomains, syncSystemDomains, syncSingleDomain } from '../sync/domains.ts';
 import { syncSingleIpSource, syncAllIpSources } from '../sync/ip-sources.ts';
+
+/** 敏感字段：序列化到前端前过滤 */
+const SENSITIVE_SETTINGS_KEYS = new Set([
+    'ADMIN_PASSWORD_HASH',
+    'PASSWORD_SALT',
+    'CF_API_TOKEN',
+    'GITHUB_TOKEN',
+]);
+
+/** 读取安全的 settings（前端可见） */
+export async function getSafeSettings(db: D1Database): Promise<Record<string, string>> {
+    const all = await getFullSettings(db);
+    for (const key of SENSITIVE_SETTINGS_KEYS) delete all[key];
+    return all;
+}
+
+/** 允许写入的 settings 白名单 */
+const ALLOWED_SETTINGS_KEYS = new Set([
+    'CF_API_TOKEN',
+    'CF_ZONE_ID',
+    'GITHUB_TOKEN',
+    'GITHUB_OWNER',
+    'GITHUB_REPO',
+    'THREE_NETWORK_SOURCE',
+]);
 
 /** API 路由分发 */
 export async function handleApiRequest(request: Request, env: { WUYA: D1Database }): Promise<Response> {
@@ -31,8 +56,8 @@ export async function handleApiRequest(request: Request, env: { WUYA: D1Database
   if (method === 'POST' && path === '/api/settings') return await apiSetSettings(request, db);
   if (method === 'GET' && path === '/api/domains') return await apiGetDomains(request, db);
   if (method === 'POST' && path === '/api/domains') return await apiAddDomain(request, db);
-  if (method === 'POST' && path === '/api/sync') return syncAllDomains(env, true) as Promise<Response>;
-  if (method === 'POST' && path === '/api/domains/sync_system') return syncSystemDomains(env, true) as Promise<Response>;
+  if (method === 'POST' && path === '/api/sync') return syncAllDomains(env, true, request.signal) as Promise<Response>;
+  if (method === 'POST' && path === '/api/domains/sync_system') return syncSystemDomains(env, true, request.signal) as Promise<Response>;
 
   const domainMatch = path.match(/^\/api\/domains\/(\d+)$/);
   if (domainMatch) {
@@ -50,13 +75,13 @@ export async function handleApiRequest(request: Request, env: { WUYA: D1Database
   const syncMatch = path.match(/^\/api\/domains\/(\d+)\/sync$/);
   if (syncMatch && method === 'POST') {
       const id = syncMatch[1];
-      return syncSingleDomain(Number(id), env, true) as Promise<Response>;
+      return syncSingleDomain(Number(id), env, true, request.signal) as Promise<Response>;
   }
 
   if (method === 'GET' && path === '/api/ip_sources') return await apiGetIpSources(db);
   if (method === 'POST' && path === '/api/ip_sources') return await apiAddIpSource(request, db);
   if (method === 'POST' && path === '/api/ip_sources/probe') return await apiProbeIpSource(request);
-  if (method === 'POST' && path === '/api/ip_sources/sync_all') return syncAllIpSources(env, true) as Promise<Response>;
+  if (method === 'POST' && path === '/api/ip_sources/sync_all') return syncAllIpSources(env, true, request.signal) as Promise<Response>;
 
   const ipSourceMatch = path.match(/^\/api\/ip_sources\/(\d+)$/);
   if (ipSourceMatch) {
@@ -68,7 +93,7 @@ export async function handleApiRequest(request: Request, env: { WUYA: D1Database
   const ipSourceSyncMatch = path.match(/^\/api\/ip_sources\/(\d+)\/sync$/);
   if (ipSourceSyncMatch && method === 'POST') {
       const id = Number(ipSourceSyncMatch[1]);
-      return syncSingleIpSource(id, env, true) as Promise<Response>;
+      return syncSingleIpSource(id, env, true, request.signal) as Promise<Response>;
   }
 
   return jsonResponse({ error: 'API 端点未找到' }, 404);
@@ -92,8 +117,10 @@ async function apiLogin(request: Request, db: D1Database): Promise<Response> {
   const { password } = await request.json() as { password?: string };
   const [storedHash, salt] = await Promise.all([getSetting(db, 'ADMIN_PASSWORD_HASH'), getSetting(db, 'PASSWORD_SALT')]);
   if (!storedHash || !salt) return jsonResponse({ error: '应用尚未初始化。' }, 400);
-  const inputHash = await hashPassword(password || '', salt);
-  if (inputHash === storedHash) {
+  const result = await verifyPassword(password || '', storedHash, salt);
+  if (result.matched) {
+      // legacy 旧哈希登录成功后立即升级为 PBKDF2
+      if (result.upgradedHash) await setSetting(db, 'ADMIN_PASSWORD_HASH', result.upgradedHash);
       const token = crypto.randomUUID();
       const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
       await db.prepare("INSERT INTO sessions (token, expires_at) VALUES (?, ?)").bind(token, expires.toISOString()).run();
@@ -116,7 +143,7 @@ async function apiLogout(request: Request, db: D1Database): Promise<Response> {
 }
 
 async function apiGetSettings(request: Request, db: D1Database): Promise<Response> {
-    const settings = await getFullSettings(db);
+    const settings = await getSafeSettings(db);
     const { token, zoneId } = await getCfApiSettings(db);
     if (token && zoneId) {
         try { settings.zoneName = await getZoneName(token, zoneId); } catch (e) { console.warn("Could not fetch zone name for settings endpoint"); }
@@ -125,8 +152,20 @@ async function apiGetSettings(request: Request, db: D1Database): Promise<Respons
 }
 
 async function apiSetSettings(request: Request, db: D1Database): Promise<Response> {
-    const settings = await request.json() as Record<string, string>;
-    const { CF_API_TOKEN, CF_ZONE_ID } = settings;
+    const rawSettings = await request.json() as Record<string, string>;
+
+    // 白名单：仅允许写入已知 key，未知 key 静默丢弃（不抛错，保持向前兼容）
+    const settings: Record<string, string> = {};
+    for (const [key, value] of Object.entries(rawSettings)) {
+        if (ALLOWED_SETTINGS_KEYS.has(key)) settings[key] = String(value);
+    }
+
+    const { CF_API_TOKEN, CF_ZONE_ID, GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO } = settings;
+
+    // Cloudflare 凭据配对验证：只要任一出现，必须两个都提供
+    if ((CF_API_TOKEN !== undefined) !== (CF_ZONE_ID !== undefined)) {
+        return jsonResponse({ error: 'Cloudflare API 令牌和区域 ID 必须同时提供。' }, 400);
+    }
     if (CF_API_TOKEN && CF_ZONE_ID) {
         try {
             const zoneName = await getZoneName(CF_API_TOKEN, CF_ZONE_ID);
@@ -135,8 +174,14 @@ async function apiSetSettings(request: Request, db: D1Database): Promise<Respons
             return jsonResponse({ error: `Cloudflare API 验证失败: ${e instanceof Error ? e.message : String(e)}` }, 400);
         }
     }
-    const setPromises = Object.entries(settings).map(([key, value]) => setSetting(db, key, value));
-    await Promise.all(setPromises);
+
+    // GitHub 凭据配对验证：同上
+    const ghDefined = [GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO].filter(v => v !== undefined);
+    if (ghDefined.length > 0 && ghDefined.length < 3) {
+        return jsonResponse({ error: 'GitHub Token、Owner、Repo 必须同时提供。' }, 400);
+    }
+
+    await Promise.all(Object.entries(settings).map(([key, value]) => setSetting(db, key, value)));
     return jsonResponse({ success: true, message: '设置已成功保存。' });
 }
 
@@ -151,20 +196,31 @@ async function apiGetDomains(request: Request, db: D1Database): Promise<Response
 }
 
 async function handleDomainMutation(request: Request, db: D1Database, isUpdate = false, id: string | null = null): Promise<Response> {
-  const { source_domain, target_domain, zone_id, is_deep_resolve, ttl, notes } = await request.json() as {
-      source_domain?: string; target_domain?: string; zone_id?: string; is_deep_resolve?: number; ttl?: number; notes?: string;
+  const { source_domain, target_domain_prefix, is_deep_resolve, ttl, notes } = await request.json() as {
+      source_domain?: string; target_domain_prefix?: string; is_deep_resolve?: number; ttl?: number; notes?: string;
   };
-  if (!source_domain || !target_domain || !zone_id) {
+  if (!source_domain || !target_domain_prefix) {
       return jsonResponse({ error: '缺少必填字段。' }, 400);
   }
   try {
+      const { zoneId, token } = await getCfApiSettings(db);
+      if (!token || !zoneId) return jsonResponse({ error: 'Cloudflare API 未配置。' }, 400);
+      const zoneName = (await getZoneName(token, zoneId)).replace(/\.$/, '');
+      const target_domain = target_domain_prefix === '@' ? zoneName : `${target_domain_prefix}.${zoneName}`;
+
       if (isUpdate && id) {
+          // 系统域名保护：禁止修改 source_domain
+          const existing = await db.prepare("SELECT source_domain, is_system FROM domains WHERE id = ?").bind(id).first() as { source_domain: string; is_system: number } | null;
+          if (!existing) return jsonResponse({ error: '目标不存在。' }, 404);
+          if (existing.is_system === 1 && existing.source_domain !== source_domain) {
+              return jsonResponse({ error: '系统预设域名的源域名不可修改。' }, 403);
+          }
           await db.prepare("UPDATE domains SET source_domain=?, target_domain=?, zone_id=?, is_deep_resolve=?, ttl=?, notes=? WHERE id=?")
-              .bind(source_domain, target_domain, zone_id, is_deep_resolve ?? 1, ttl ?? 60, notes || null, id).run();
+              .bind(source_domain, target_domain, zoneId, is_deep_resolve ?? 1, ttl ?? 60, notes || null, id).run();
           return jsonResponse({ success: true, message: '目标更新成功。' });
       }
       await db.prepare("INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, ttl, notes) VALUES (?, ?, ?, ?, ?, ?)")
-          .bind(source_domain, target_domain, zone_id, is_deep_resolve ?? 1, ttl ?? 60, notes || null).run();
+          .bind(source_domain, target_domain, zoneId, is_deep_resolve ?? 1, ttl ?? 60, notes || null).run();
       return jsonResponse({ success: true, message: '目标添加成功。' });
   } catch (e) {
       if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) return jsonResponse({ error: '目标域名已存在。' }, 409);
