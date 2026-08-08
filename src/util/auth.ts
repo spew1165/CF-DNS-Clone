@@ -2,8 +2,12 @@
 // 从 index.legacy.js 提取（原 1844-1846 行）
 
 /**
- * 哈希密码（PBKDF2，≥100k 迭代）
+ * 哈希密码（PBKDF2，100k 迭代）
  * 隐含修正 B3：原单轮 SHA-256 升级为 PBKDF2，防彩虹表/字典攻击
+ *
+ * 哈希格式：前缀标记实现多版本并存
+ *   `pbkdf2$100000$<salt>$<hex>` —— 新格式（PBKDF2-HMAC-SHA256）
+ *   `raw$64hex`                —— legacy 单轮 SHA-256 兼容（已部署实例）
  */
 export async function hashPassword(password: string, salt: string): Promise<string> {
     const encoder = new TextEncoder();
@@ -19,7 +23,56 @@ export async function hashPassword(password: string, salt: string): Promise<stri
         keyMaterial,
         256
     );
-    return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const hex = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `pbkdf2$100000$${salt}$${hex}`;
+}
+
+/**
+ * legacy 哈希：单轮 SHA-256（与原 index.legacy.js 同算法）
+ * 仅供密码登录时回退验证；登录成功后立即升级为 PBKDF2
+ */
+export async function legacyHashPassword(password: string, salt: string): Promise<string> {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(password + salt);
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `raw$${hex}`;
+}
+
+/**
+ * 校验密码（兼容旧哈希）；返回 matched + 旧格式升级所需的新 hash（仅当匹配且为 legacy 时返回）
+ */
+export async function verifyPassword(password: string, storedHash: string, legacySalt: string): Promise<{ matched: boolean; upgradedHash?: string }> {
+    if (storedHash.startsWith('pbkdf2$')) {
+        const parts = storedHash.split('$');
+        if (parts.length !== 4) return { matched: false };
+        const [, iterStr, salt, hex] = parts;
+        const iterations = Number(iterStr);
+        const encoder = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
+        const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: encoder.encode(salt), iterations, hash: 'SHA-256' }, keyMaterial, 256);
+        const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+        return { matched: candidate === hex };
+    }
+    if (storedHash.startsWith('raw$')) {
+        const candidate = await legacyHashPassword(password, legacySalt);
+        if (candidate === storedHash) {
+            const newSalt = crypto.randomUUID();
+            const upgraded = await hashPassword(password, newSalt);
+            return { matched: true, upgradedHash: upgraded };
+        }
+        return { matched: false };
+    }
+    // 极早期版本可能只有纯 hex（无前缀），按 raw 处理
+    const encoder = new TextEncoder();
+    const buf = await crypto.subtle.digest('SHA-256', encoder.encode(password + legacySalt));
+    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    if (hex === storedHash) {
+        const newSalt = crypto.randomUUID();
+        const upgraded = await hashPassword(password, newSalt);
+        return { matched: true, upgradedHash: upgraded };
+    }
+    return { matched: false };
 }
 
 /**
