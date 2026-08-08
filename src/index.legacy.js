@@ -7,7 +7,7 @@ import { beijingTimeLog } from './util/log.ts';
 import { createLogStreamResponse } from './util/sse.ts';
 import { getZoneName } from './util/cf.ts';
 import { ensureRepoExists, getCurrentGitHubContent, updateFileOnGitHub } from './sync/github.ts';
-import { FETCH_STRATEGIES, fetchIpsFromSource, fetchThreeNetworkIps } from './sync/ip-sources.ts';
+import { FETCH_STRATEGIES, fetchIpsFromSource, fetchThreeNetworkIps, syncSingleIpSource, syncAllIpSources, syncScheduledIpSources } from './sync/ip-sources.ts';
 import { syncScheduledDomains, syncDomainLogic, syncSingleDomain, syncAllDomains, syncSystemDomains } from './sync/domains.ts';
 
 export default {
@@ -61,45 +61,7 @@ export default {
   },
 };
 
-// syncScheduledDomains 已移至 ./sync/domains.ts
-
-async function syncScheduledIpSources(env) {
-    const BATCH_SIZE = 5;
-    const db = env.WUYA;
-    const log = (msg) => console.log(beijingTimeLog(msg));
-
-    const githubSettings = await getGitHubSettings(db);
-    if (!githubSettings.token || !githubSettings.owner || !githubSettings.repo) {
-        log("Cannot run scheduled IP source sync: GitHub settings are missing.");
-        return;
-    }
-
-    const query = `
-        SELECT id FROM ip_sources 
-        WHERE is_enabled = 1 
-        ORDER BY 
-            CASE last_sync_status WHEN 'failed' THEN 0 ELSE 1 END, 
-            last_synced_time ASC
-        LIMIT ?`;
-
-    const { results: sourcesToSync } = await db.prepare(query).bind(BATCH_SIZE).all();
-
-    if (sourcesToSync.length === 0) {
-        log("No IP sources to sync in this batch.");
-        return;
-    }
-
-    log(`Found ${sourcesToSync.length} IP sources for this sync batch (failure-first).`);
-    for (const source of sourcesToSync) {
-        await syncSingleIpSource(source.id, env, false).catch(e => {
-             log(`Error processing IP source ID ${source.id} in batch: ${e.message}`);
-        });
-    }
-}
-
-// 数据库初始化与迁移已移至 ./db/migrations.ts
-
-// settings 读写与 Cloudflare/GitHub 凭据读取已移至 ./db/client.ts
+// syncScheduledDomains / syncScheduledIpSources 已移至 ./sync/
 
 async function handleApiRequest(request, env) {
   const url = new URL(request.url);
@@ -1148,69 +1110,7 @@ async function apiProbeIpSource(request) {
     return jsonResponse({ error: '所有探测方案均失败，无法从此URL提取IP。' }, 400);
 }
 
-async function syncSingleIpSource(id, env, returnLogs) {
-    const db = env.WUYA;
-    const syncLogic = async (log) => {
-        const githubSettings = await getGitHubSettings(db);
-        if (!githubSettings.token || !githubSettings.owner || !githubSettings.repo) {
-            throw new Error("GitHub API设置不完整。");
-        }
-        const source = await db.prepare("SELECT * FROM ip_sources WHERE id = ?").bind(id).first();
-        if (!source) throw new Error(`未找到ID为 ${id} のIP源。`);
-        
-        log(`======== 开始同步IP源: ${source.url} ========`);
-        
-        try {
-            const ips = await fetchIpsFromSource(source);
-            log(`成功获取 ${ips.length} 个IP。`);
-            
-            const newContent = ips.join('\n');
-            const oldContent = await getCurrentGitHubContent({ ...githubSettings, path: source.github_path, log });
-
-            if (oldContent !== null && newContent.trim() === oldContent.trim()) {
-                log(`内容无变化，无需更新 GitHub。`);
-                await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'no_change', last_sync_error = NULL WHERE id = ?").bind(id).run();
-                log(`✔ 状态更新为内容一致。`);
-                return;
-            }
-            
-            await updateFileOnGitHub({ ...githubSettings, path: source.github_path, content: newContent, message: source.commit_message, log });
-            log(`✔ 成功同步到GitHub: ${source.github_path}`);
-            
-            await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'success', last_sync_error = NULL WHERE id = ?").bind(id).run();
-        } catch (e) {
-            log(`❌ 同步失败: ${e.message}`);
-            await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'failed', last_sync_error = ? WHERE id = ?").bind(e.message, id).run();
-            throw e;
-        }
-    };
-
-    if (returnLogs) return createLogStreamResponse(syncLogic);
-    
-    const noOpLog = (msg) => console.log(beijingTimeLog(msg));
-    await syncLogic(noOpLog);
-}
-
-async function syncAllIpSources(env, returnLogs) {
-    const db = env.WUYA;
-    const syncLogic = async (log) => {
-        log("开始批量同步IP源...");
-        const { results: sources } = await db.prepare("SELECT * FROM ip_sources WHERE is_enabled = 1").all();
-        if (sources.length === 0) {
-            log("没有已启用的IP源需要同步。");
-            return;
-        }
-        for (const source of sources) {
-            await syncSingleIpSource(source.id, env, false).catch(e => log(`处理ID ${source.id} 失败: ${e.message}`));
-        }
-        log("所有IP源同步任务执行完毕。");
-    };
-
-    if (returnLogs) return createLogStreamResponse(syncLogic);
-
-    const noOpLog = (msg) => console.log(beijingTimeLog(msg));
-    await syncLogic(noOpLog);
-}
+// syncSingleIpSource / syncAllIpSources 已移至 ./sync/ip-sources.ts
 
 async function handleGitHubFileProxy(fileName, env, ctx) {
     const db = env.WUYA;

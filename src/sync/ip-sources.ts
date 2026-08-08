@@ -1,5 +1,10 @@
 // ip-sources.ts — IP 源抓取与同步逻辑
-// 从 index.legacy.js 提取（原 1158-1236、1598-1673 行）
+// 从 index.legacy.js 提取（原 1158-1236、1598-1673 行 + sync 入口函数）
+
+import { getGitHubSettings } from '../db/client.ts';
+import { getCurrentGitHubContent, updateFileOnGitHub } from './github.ts';
+import { beijingTimeLog } from '../util/log.ts';
+import { createLogStreamResponse } from '../util/sse.ts';
 
 // 注意：dummy_strategy_4~30 为原文件既有代码（疑似测试残留），按"不删预存代码"原则原样保留
 
@@ -49,6 +54,110 @@ for (let i = 4; i <= 30; i++) {
         }
         throw new Error("Dummy strategy failed");
     };
+}
+
+type LogFn = (msg: string) => void;
+
+/** 定时任务：批量同步 IP 源（失败优先） */
+export async function syncScheduledIpSources(env: { WUYA: D1Database }): Promise<void> {
+    const BATCH_SIZE = 5;
+    const db = env.WUYA;
+    const log: LogFn = (msg) => console.log(beijingTimeLog(msg));
+
+    const githubSettings = await getGitHubSettings(db);
+    if (!githubSettings.token || !githubSettings.owner || !githubSettings.repo) {
+        log("Cannot run scheduled IP source sync: GitHub settings are missing.");
+        return;
+    }
+
+    const query = `
+        SELECT id FROM ip_sources
+        WHERE is_enabled = 1
+        ORDER BY
+            CASE last_sync_status WHEN 'failed' THEN 0 ELSE 1 END,
+            last_synced_time ASC
+        LIMIT ?`;
+
+    const { results: sourcesToSync } = await db.prepare(query).bind(BATCH_SIZE).all() as { results: { id: number }[] };
+
+    if (sourcesToSync.length === 0) {
+        log("No IP sources to sync in this batch.");
+        return;
+    }
+
+    log(`Found ${sourcesToSync.length} IP sources for this sync batch (failure-first).`);
+    for (const source of sourcesToSync) {
+        await syncSingleIpSource(source.id, env, false).catch(e => {
+            log(`Error processing IP source ID ${source.id} in batch: ${e instanceof Error ? e.message : String(e)}`);
+        });
+    }
+}
+
+/** 单个 IP 源同步入口 */
+export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+    const db = env.WUYA;
+    const syncLogic = async (log: LogFn) => {
+        const githubSettings = await getGitHubSettings(db);
+        if (!githubSettings.token || !githubSettings.owner || !githubSettings.repo) {
+            throw new Error("GitHub API设置不完整。");
+        }
+        const gh = githubSettings as { token: string; owner: string; repo: string };
+        const source = await db.prepare("SELECT * FROM ip_sources WHERE id = ?").bind(id).first() as IpSourceRow | null;
+        if (!source) throw new Error(`未找到ID为 ${id} 的IP源。`);
+
+        log(`======== 开始同步IP源: ${source.url} ========`);
+
+        try {
+            const ips = await fetchIpsFromSource(source);
+            log(`成功获取 ${ips.length} 个IP。`);
+
+            const newContent = ips.join('\n');
+            const oldContent = await getCurrentGitHubContent({ ...gh, path: source.github_path, log });
+
+            if (oldContent !== null && newContent.trim() === oldContent.trim()) {
+                log(`内容无变化，无需更新 GitHub。`);
+                await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'no_change', last_sync_error = NULL WHERE id = ?").bind(id).run();
+                log(`✔ 状态更新为内容一致。`);
+                return;
+            }
+
+            await updateFileOnGitHub({ ...gh, path: source.github_path, content: newContent, message: source.commit_message, log });
+            log(`✔ 成功同步到GitHub: ${source.github_path}`);
+
+            await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'success', last_sync_error = NULL WHERE id = ?").bind(id).run();
+        } catch (e) {
+            log(`❌ 同步失败: ${e instanceof Error ? e.message : String(e)}`);
+            await db.prepare("UPDATE ip_sources SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'failed', last_sync_error = ? WHERE id = ?").bind(e instanceof Error ? e.message : String(e), id).run();
+            throw e;
+        }
+    };
+
+    if (returnLogs) return createLogStreamResponse(syncLogic);
+
+    const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
+    await syncLogic(noOpLog);
+}
+
+/** 批量同步全部启用 IP 源 */
+export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: boolean): Promise<Response | void> {
+    const db = env.WUYA;
+    const syncLogic = async (log: LogFn) => {
+        log("开始批量同步IP源...");
+        const { results: sources } = await db.prepare("SELECT * FROM ip_sources WHERE is_enabled = 1").all() as { results: IpSourceRow[] };
+        if (sources.length === 0) {
+            log("没有已启用的IP源需要同步。");
+            return;
+        }
+        for (const source of sources) {
+            await syncSingleIpSource(source.id, env, false).catch(e => log(`处理ID ${source.id} 失败: ${e instanceof Error ? e.message : String(e)}`));
+        }
+        log("所有IP源同步任务执行完毕。");
+    };
+
+    if (returnLogs) return createLogStreamResponse(syncLogic);
+
+    const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
+    await syncLogic(noOpLog);
 }
 
 /** 按策略抓取 IP（带排序） */
