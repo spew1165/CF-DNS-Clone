@@ -7,6 +7,7 @@ import { beijingTimeLog } from './util/log.ts';
 import { createLogStreamResponse } from './util/sse.ts';
 import { getZoneName } from './util/cf.ts';
 import { ensureRepoExists, getCurrentGitHubContent, updateFileOnGitHub } from './sync/github.ts';
+import { FETCH_STRATEGIES, fetchIpsFromSource, fetchThreeNetworkIps } from './sync/ip-sources.ts';
 
 export default {
   async fetch(request, env, ctx) {
@@ -1155,42 +1156,9 @@ async function apiDeleteIpSource(db, id) {
     await db.prepare('DELETE FROM ip_sources WHERE id = ?').bind(id).run();
     return jsonResponse({ success: true, message: "IP源删除成功。" });
 }
-const FETCH_STRATEGIES = {
-    direct_regex: async (url) => {
-        const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
-        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-        const text = await res.text();
-        const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
-        return [...new Set(ips)];
-    },
-    phantomjs_cloud: async (url) => {
-        const res = await fetch('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ url, renderType: 'html' })
-        });
-        if (!res.ok) throw new Error(`PhantomJsCloud API error ${res.status}`);
-        const text = await res.text();
-        const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
-        return [...new Set(ips)];
-    },
-    proxy_codetabs: async (url) => {
-        const proxyUrl = 'https://api.codetabs.com/v1/proxy?quest=' + encodeURIComponent(url);
-        const res = await fetch(proxyUrl);
-        if (!res.ok) throw new Error(`CodeTabs Proxy error ${res.status}`);
-        const text = await res.text();
-        const ips = text.match(/\b(?:\d{1,3}\.){3}\d{1,3}\b/g) || [];
-        return [...new Set(ips)];
-    },
-};
-for (let i = 4; i <= 30; i++) {
-    FETCH_STRATEGIES[`dummy_strategy_${i}`] = async (url) => { 
-        if (url.includes("special-case")) {
-             return ["1.2.3." + i]; 
-        }
-        throw new Error("Dummy strategy failed"); 
-    };
-}
+// FETCH_STRATEGIES / fetchIpsFromSource / fetchThreeNetworkIps 已移至 ./sync/ip-sources.ts
+
+async function getDnsFromDoh(domain, type) { try { const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`; const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } }); if (!response.ok) { console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`); return []; } const data = await response.json(); return data.Answer ? data.Answer.map(ans => ans.data).filter(Boolean) : []; } catch (e) { console.error(`DoH query error for ${domain} (${type}): ${e.message}`); return []; } }
 
 async function apiProbeIpSource(request) {
     const { url } = await request.json();
@@ -1214,32 +1182,6 @@ async function apiProbeIpSource(request) {
 
     return jsonResponse({ error: '所有探测方案均失败，无法从此URL提取IP。' }, 400);
 }
-
-async function fetchIpsFromSource(source) {
-    const strategyFn = FETCH_STRATEGIES[source.fetch_strategy];
-    if (!strategyFn) {
-        throw new Error(`Unknown fetch strategy: ${source.fetch_strategy}`);
-    }
-    const ips = await strategyFn(source.url);
-    if (!ips || ips.length === 0) {
-        throw new Error('No IPs found using the cached strategy.');
-    }
-    const sortIps = (a, b) => {
-        const aParts = a.split('.').map(Number);
-        const bParts = b.split('.').map(Number);
-        for (let i = 0; i < 4; i++) {
-            if (aParts[i] !== bParts[i]) return aParts[i] - bParts[i];
-        }
-        return 0;
-    };
-    return ips.sort(sortIps);
-}
-
-// GitHub API 封装（githubApiRequest / ensureRepoExists / getCurrentGitHubContent / updateFileOnGitHub）已移至 ./sync/github.ts
-
-// 尾部工具函数（createLogStreamResponse / getZoneName / hashPassword / isAuthenticated / getCookie / jsonResponse / beijingTimeLog）已移至 src/util/ 与 src/db/
-
-async function getDnsFromDoh(domain, type) { try { const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`; const response = await fetch(url, { headers: { 'accept': 'application/dns-json' } }); if (!response.ok) { console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`); return []; } const data = await response.json(); return data.Answer ? data.Answer.map(ans => ans.data).filter(Boolean) : []; } catch (e) { console.error(`DoH query error for ${domain} (${type}): ${e.message}`); return []; } }
 
 async function syncSingleIpSource(id, env, returnLogs) {
     const db = env.WUYA;
@@ -1595,80 +1537,5 @@ async function updateCloudflareDns(token, zoneId, domain, newRecords, log) {
   return 'success';
 }
 
-async function fetchThreeNetworkIps(source, log) {
-    log(`正在从源 [${source}] 获取IP...`);
-
-    async function parseHtmlTableWithOperator(htmlContent) {
-        const ips = { yd: new Set(), dx: new Set(), lt: new Set() };
-        const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
-        const cellRegex = /<td[^>]*>([\s\S]*?)<\/td>/gi;
-        const ipRegex = /\b(?:\d{1,3}\.){3}\d{1,3}\b/;
-
-        let rowMatch;
-        while ((rowMatch = rowRegex.exec(htmlContent)) !== null) {
-            const cells = Array.from(rowMatch[1].matchAll(cellRegex), m => m[1].replace(/<[^>]+>/g, '').trim());
-            if (cells.length >= 2) {
-                const lineCell = cells.find(c => c.includes('电信') || c.includes('联通') || c.includes('移动'));
-                const ipCell = cells.find(c => ipRegex.test(c));
-
-                if (lineCell && ipCell) {
-                    const ip = ipCell.match(ipRegex)[0];
-                    if (lineCell.includes('移动')) ips.yd.add(ip);
-                    else if (lineCell.includes('电信')) ips.dx.add(ip);
-                    else if (lineCell.includes('联通')) ips.lt.add(ip);
-                }
-            }
-        }
-        
-        const allIpsArray = [...ips.yd, ...ips.dx, ...ips.lt];
-        if (allIpsArray.length > 0) {
-            const allIps = new Set(allIpsArray);
-            if (ips.yd.size === 0) ips.yd = allIps;
-            if (ips.dx.size === 0) ips.dx = allIps;
-            if (ips.lt.size === 0) ips.lt = allIps;
-        }
-        
-        return { yd: Array.from(ips.yd), dx: Array.from(ips.dx), lt: Array.from(ips.lt) };
-    }
-
-    try {
-        let url;
-        let usePhantom = false;
-        switch (source) {
-            case 'api.uouin.com':
-                url = 'https://api.uouin.com/cloudflare.html';
-                break;
-            case 'wetest.vip':
-                url = 'https://www.wetest.vip/page/cloudflare/address_v4.html';
-                break;
-            case 'CloudFlareYes':
-            default:
-                url = 'https://stock.hostmonit.com/CloudFlareYes';
-                usePhantom = true;
-                break;
-        }
-
-        let htmlContent;
-        if (usePhantom) {
-            const fetchUrl = 'https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/';
-            const response = await fetch(fetchUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url: url, renderType: 'html' })
-            });
-            if (!response.ok) throw new Error(`获取 ${url} 失败: ${response.statusText}`);
-            htmlContent = await response.text();
-        } else {
-            const response = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }});
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            htmlContent = await response.text();
-        }
-        
-        return await parseHtmlTableWithOperator(htmlContent);
-
-    } catch (e) {
-        log(`从源 [${source}] 获取IP失败: ${e.message}`);
-        return { yd: [], dx: [], lt: [] };
-    }
-}
+// fetchThreeNetworkIps 已移至 ./sync/ip-sources.ts
 
