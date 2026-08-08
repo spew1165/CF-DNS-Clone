@@ -1,6 +1,8 @@
 // github.ts — GitHub API 封装（仓库检查 / 内容读取 / 文件更新）
 // 从 index.legacy.js 提取（原 1237-1310 行）
 
+import { fetchWithRetry } from '../util/fetch.ts';
+
 /** GitHub API 请求统一封装 */
 async function githubApiRequest(url: string, token: string, options: RequestInit = {}): Promise<Response> {
     const headers = {
@@ -9,7 +11,7 @@ async function githubApiRequest(url: string, token: string, options: RequestInit
         'Accept': 'application/vnd.github.v3+json',
         ...(options.headers as Record<string, string> | undefined),
     };
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetchWithRetry(url, { ...options, headers }, 1, 15000);
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: response.statusText })) as { message?: string };
         throw new Error(`GitHub API error (${response.status}): ${errorData.message ?? response.statusText}`);
