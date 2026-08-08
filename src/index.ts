@@ -40,19 +40,34 @@ export default {
   },
   async scheduled(controller: ScheduledController, env: { WUYA: D1Database }, ctx: ExecutionContext): Promise<void> {
       console.log("Scheduled task started: Initializing...");
-      await initializeAndMigrateDatabase(env);
+      try {
+          await initializeAndMigrateDatabase(env);
+      } catch (e) {
+          console.error("Database initialization failed in scheduled handler:", e instanceof Error ? e.stack : e);
+          return;
+      }
 
       const db = env.WUYA;
       const nextTask = await getSetting(db, 'next_sync_task') || 'domains';
 
-      if (nextTask === 'domains') {
-          console.log("Scheduled task: Syncing a batch of DNS records (failure-first)...");
-          await syncScheduledDomains(env);
-          await setSetting(db, 'next_sync_task', 'ip_sources');
-      } else {
-          console.log("Scheduled task: Syncing a batch of IP sources to GitHub (failure-first)...");
-          await syncScheduledIpSources(env);
-          await setSetting(db, 'next_sync_task', 'domains');
+      // 先轮转状态：无论 sync 成功或失败，下一分钟都跑另一个任务，避免单点失败永久卡死
+      const otherTask = nextTask === 'domains' ? 'ip_sources' : 'domains';
+      try {
+          await setSetting(db, 'next_sync_task', otherTask);
+      } catch (e) {
+          console.error("Failed to rotate next_sync_task:", e instanceof Error ? e.stack : e);
+      }
+
+      try {
+          if (nextTask === 'domains') {
+              console.log("Scheduled task: Syncing a batch of DNS records (failure-first)...");
+              await syncScheduledDomains(env);
+          } else {
+              console.log("Scheduled task: Syncing a batch of IP sources to GitHub (failure-first)...");
+              await syncScheduledIpSources(env);
+          }
+      } catch (e) {
+          console.error(`Scheduled task '${nextTask}' failed:`, e instanceof Error ? e.stack : e);
       }
 
       console.log("Scheduled task for this cycle finished.");
