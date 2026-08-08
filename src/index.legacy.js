@@ -6,6 +6,7 @@ import { jsonResponse } from './util/http.ts';
 import { beijingTimeLog } from './util/log.ts';
 import { createLogStreamResponse } from './util/sse.ts';
 import { getZoneName } from './util/cf.ts';
+import { ensureRepoExists, getCurrentGitHubContent, updateFileOnGitHub } from './sync/github.ts';
 
 export default {
   async fetch(request, env, ctx) {
@@ -1234,80 +1235,7 @@ async function fetchIpsFromSource(source) {
     return ips.sort(sortIps);
 }
 
-async function githubApiRequest(url, token, options = {}) {
-    const headers = {
-        'Authorization': `Bearer ${token}`,
-        'User-Agent': 'DNS-Clone-Worker',
-        'Accept': 'application/vnd.github.v3+json',
-        ...options.headers,
-    };
-    const response = await fetch(url, { ...options, headers });
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: response.statusText }));
-        throw new Error(`GitHub API error (${response.status}): ${errorData.message}`);
-    }
-    return response;
-}
-
-async function ensureRepoExists(token, owner, repo, log) {
-    const repoUrl = `https://api.github.com/repos/${owner}/${repo}`;
-    try {
-        await githubApiRequest(repoUrl, token);
-        log(`仓库 '${owner}/${repo}' 已存在。`);
-    } catch (e) {
-        if (e.message.includes('404')) {
-            log(`仓库 '${owner}/${repo}' 不存在，正在尝试创建...`);
-            const createUrl = `https://api.github.com/user/repos`;
-            const body = JSON.stringify({
-                name: repo,
-                private: true,
-                description: 'Auto-generated repository for IP source files by DNS Clone Worker.'
-            });
-            await githubApiRequest(createUrl, token, { method: 'POST', body });
-            log(`✔ 成功创建私有仓库 '${owner}/${repo}'。`);
-        } else {
-            throw e;
-        }
-    }
-}
-
-async function getCurrentGitHubContent({ token, owner, repo, path, log }) {
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-    try {
-        const response = await githubApiRequest(apiUrl, token, {
-            headers: { 'Accept': 'application/vnd.github.v3.raw' }
-        });
-        return await response.text();
-    } catch (e) {
-        if (e.message.includes('404')) {
-            log(`GitHub文件 '${path}' 不存在，将创建新文件。`);
-            return null;
-        }
-        throw e;
-    }
-}
-
-async function updateFileOnGitHub({ token, owner, repo, path, content, message, log }) {
-    await ensureRepoExists(token, owner, repo, log);
-    
-    const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
-    let sha;
-    try {
-        const getFileResponse = await githubApiRequest(apiUrl, token);
-        const fileData = await getFileResponse.json();
-        sha = fileData.sha;
-    } catch (e) {
-        if (!e.message.includes('404')) throw e;
-    }
-    
-    const body = JSON.stringify({
-        message,
-        content: btoa(unescape(encodeURIComponent(content))),
-        sha
-    });
-
-    await githubApiRequest(apiUrl, token, { method: 'PUT', body });
-}
+// GitHub API 封装（githubApiRequest / ensureRepoExists / getCurrentGitHubContent / updateFileOnGitHub）已移至 ./sync/github.ts
 
 // 尾部工具函数（createLogStreamResponse / getZoneName / hashPassword / isAuthenticated / getCookie / jsonResponse / beijingTimeLog）已移至 src/util/ 与 src/db/
 
