@@ -1,7 +1,7 @@
 // api.test.ts — API 路由分发 + 登录 + 域名 CRUD + 设置白名单 + 权限守卫 + 敏感字段过滤
 // 覆盖 plan v2 用例表 + fix-plan 14 项 findings 回归
 import { SELF, env } from "cloudflare:test";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
 
 // 种子密码（见 apply-migrations.ts）
 const PASSWORD = "test-password-123";
@@ -46,6 +46,84 @@ describe("/api/login", () => {
         expect(setCookie).toContain("session=");
         expect(setCookie).toContain("HttpOnly");
         expect(setCookie).toContain("Max-Age=86400");
+    });
+});
+
+describe("/api/login 限流 (FIX-05)", () => {
+    // 每个测试前清空 login_attempts 与 sessions，避免累计状态污染
+    beforeEach(async () => {
+        await env.WUYA.batch([
+            env.WUYA.prepare("DELETE FROM login_attempts"),
+            env.WUYA.prepare("DELETE FROM sessions"),
+        ]);
+    });
+
+    // 整组跑完清理一次（防止影响后续 loginAndGetCookie）
+    afterAll(async () => {
+        await env.WUYA.batch([
+            env.WUYA.prepare("DELETE FROM login_attempts"),
+            env.WUYA.prepare("DELETE FROM sessions"),
+        ]);
+    });
+
+    it("连续 5 次错误密码：第 6 次返回 429", async () => {
+        const wrongBody = JSON.stringify({ password: "definitely-wrong" });
+        const opts = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: wrongBody,
+        } as const;
+        // 前 5 次：401
+        for (let i = 0; i < 5; i++) {
+            const res = await SELF.fetch("https://example.com/api/login", opts);
+            expect(res.status).toBe(401);
+        }
+        // 第 6 次：被限流 → 429
+        const res = await SELF.fetch("https://example.com/api/login", opts);
+        expect(res.status).toBe(429);
+        const body = await res.json() as { error: string };
+        expect(body.error).toMatch(/过于频繁/);
+
+        // 验证 login_attempts 表中只有 5 条失败记录（限流预检阻止第 6 次写入）
+        const cnt = await env.WUYA.prepare(
+            "SELECT COUNT(*) as n FROM login_attempts WHERE success = 0"
+        ).first() as { n: number };
+        expect(cnt.n).toBe(5);
+    });
+
+    it("成功登录后清理该 IP 的失败记录（首次成功后再错 5 次仍能再次触发限流）", async () => {
+        const wrongBody = JSON.stringify({ password: "wrong" });
+        const opts = {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: wrongBody,
+        } as const;
+        // 4 次错误（离限流还差 1 次）
+        for (let i = 0; i < 4; i++) {
+            const res = await SELF.fetch("https://example.com/api/login", opts);
+            expect(res.status).toBe(401);
+        }
+        // 1 次成功（清理失败）
+        const okRes = await SELF.fetch("https://example.com/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ password: PASSWORD }),
+        });
+        expect(okRes.status).toBe(200);
+
+        // 验证失败记录已被清理
+        const cnt = await env.WUYA.prepare(
+            "SELECT COUNT(*) as n FROM login_attempts WHERE success = 0"
+        ).first() as { n: number };
+        expect(cnt.n).toBe(0);
+
+        // 再次错误 5 次后应再次被限流
+        for (let i = 0; i < 5; i++) {
+            const res = await SELF.fetch("https://example.com/api/login", opts);
+            expect(res.status).toBe(401);
+        }
+        const limitedRes = await SELF.fetch("https://example.com/api/login", opts);
+        expect(limitedRes.status).toBe(429);
     });
 });
 

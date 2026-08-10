@@ -115,6 +115,17 @@ async function apiSetup(request: Request, db: D1Database): Promise<Response> {
 }
 
 async function apiLogin(request: Request, db: D1Database): Promise<Response> {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+
+  // 速率限制：5 分钟内失败 ≥5 次则拒绝
+  const recent = await db
+    .prepare("SELECT COUNT(*) as n FROM login_attempts WHERE ip = ? AND success = 0 AND attempted_at > datetime('now', '-5 minutes')")
+    .bind(ip)
+    .first();
+  if (recent && (recent as { n: number }).n >= 5) {
+    return jsonResponse({ error: "尝试过于频繁，请稍后再试。" }, 429);
+  }
+
   const { password } = await request.json() as { password?: string };
   const [storedHash, salt] = await Promise.all([getSetting(db, 'ADMIN_PASSWORD_HASH'), getSetting(db, 'PASSWORD_SALT')]);
   if (!storedHash || !salt) return jsonResponse({ error: '应用尚未初始化。' }, 400);
@@ -124,10 +135,15 @@ async function apiLogin(request: Request, db: D1Database): Promise<Response> {
       if (result.upgradedHash) await setSetting(db, 'ADMIN_PASSWORD_HASH', result.upgradedHash);
       const token = crypto.randomUUID();
       const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-      await db.prepare("INSERT INTO sessions (token, expires_at) VALUES (?, ?)").bind(token, expires.toISOString()).run();
+      await db.batch([
+        db.prepare("INSERT INTO sessions (token, expires_at) VALUES (?, ?)").bind(token, expires.toISOString()),
+        db.prepare("INSERT INTO login_attempts (ip, success) VALUES (?, 1)").bind(ip),
+        db.prepare("DELETE FROM login_attempts WHERE ip = ? AND success = 0").bind(ip),
+      ]);
       const sessionCookie = `session=${token}; HttpOnly; Secure; Path=/; SameSite=Strict; Max-Age=86400`;
       return jsonResponse({ success: true }, 200, { 'Set-Cookie': sessionCookie });
   }
+  await db.prepare("INSERT INTO login_attempts (ip, success) VALUES (?, 0)").bind(ip).run();
   return jsonResponse({ error: '密码无效。' }, 401);
 }
 

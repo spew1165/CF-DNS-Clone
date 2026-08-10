@@ -31,6 +31,11 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
             'UNIQUE(target_domain)'
         ],
         sessions: ['token TEXT PRIMARY KEY NOT NULL', 'expires_at TIMESTAMP NOT NULL'],
+        login_attempts: [
+            'ip TEXT NOT NULL',
+            'attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP',
+            'success INTEGER NOT NULL DEFAULT 0',
+        ],
         ip_sources: [
             'id INTEGER PRIMARY KEY AUTOINCREMENT',
             'url TEXT NOT NULL UNIQUE',
@@ -65,6 +70,10 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
 
     const { token, zoneId } = await getCfApiSettings(db);
     if (!token || !zoneId) return;
+
+    // 索引与清理：登录尝试表 + 索引（计划 FIX-05）
+    await db.prepare("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip, attempted_at)").run();
+    await db.prepare("DELETE FROM login_attempts WHERE attempted_at < datetime('now', '-1 hour')").run();
 
     const { results: invalidDomains } = await db
         .prepare("SELECT id, target_domain FROM domains WHERE target_domain LIKE '%.'")
