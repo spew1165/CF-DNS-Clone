@@ -148,7 +148,11 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
         log(`发现 ${domains.length} 个已启用的系统域名需要同步。`);
         const syncContext: Record<string, unknown> = {};
         for (const domain of domains) {
-            await syncDomainLogic(domain, token, zoneId, db, log, syncContext).catch(e => {});
+            await syncDomainLogic(domain, token, zoneId, db, log, syncContext).catch(
+                (e) => {
+                    log(`系统域名 ${domain.target_domain} 同步失败: ${e instanceof Error ? e.message : String(e)}`);
+                },
+            );
         }
         log("系统域名同步任务执行完毕。");
     };

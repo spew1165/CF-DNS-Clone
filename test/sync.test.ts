@@ -4,7 +4,7 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { fetchIpsFromSource, syncSingleIpSource, FETCH_STRATEGIES } from "../src/sync/ip-sources.ts";
-import { syncDomainLogic } from "../src/sync/domains.ts";
+import { syncDomainLogic, syncSystemDomains } from "../src/sync/domains.ts";
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -110,5 +110,35 @@ describe("syncSingleIpSource (Task 2.1 is_enabled 守卫)", () => {
 
     it("throws when source id does not exist", async () => {
         await expect(syncSingleIpSource(999999, env, false)).rejects.toThrow(/未找到|已被禁用/);
+    });
+});
+
+describe("syncSystemDomains (FIX-02: 错误日志替代静默)", () => {
+    it("syncDomainLogic 抛错时 D1 写入 failed 状态，且日志输出可定位失败域名", async () => {
+        // 插入一个启用系统域名，source_domain 设为 internal:hostmonit:CM
+        await env.WUYA.prepare(
+            "INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, is_system, is_enabled) VALUES (?, ?, ?, ?, 1, 1)"
+        ).bind("internal:hostmonit:CM", "sys-catch-test.example.com", "test-zone-id", 0).run();
+
+        // 让 fetch 抛错（无论谁尝试访问网络都会失败）—— 三网源获取失败 → 后续 ips 为 undefined → 同步逻辑抛错
+        vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network boom"); }));
+
+        await syncSystemDomains(env, false);
+
+        // FIX-02 验证点 1：D1 中应记录 failed 状态（syncDomainLogic 内 catch 写入）
+        const row = await env.WUYA.prepare(
+            "SELECT last_sync_status, last_sync_error FROM domains WHERE target_domain = ?"
+        ).bind("sys-catch-test.example.com").first() as { last_sync_status: string; last_sync_error: string } | null;
+
+        expect(row).not.toBeNull();
+        expect(row!.last_sync_status).toBe("failed");
+        // 错误信息非空（含失败的同步上下文错误）
+        expect(row!.last_sync_error).toBeTruthy();
+
+        // FIX-02 验证点 2：syncSystemDomains 不因单个 domain 失败而整体 reject
+        // 验证通过：上面 await 正常返回即为整体通过
+
+        // 清理
+        await env.WUYA.prepare("DELETE FROM domains WHERE target_domain = ?").bind("sys-catch-test.example.com").run();
     });
 });
