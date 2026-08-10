@@ -13,6 +13,15 @@ export function createLogStreamResponse(logFunction: (log: (message: string) => 
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
     let aborted = false;
+    let closed = false;
+
+    // 单一 close 路径：避免 abort 与 finally 双重 close 引发的 TypeError（FIX-09）
+    const safeClose = () => {
+        if (closed) return Promise.resolve();
+        closed = true;
+        return writer.close().catch(() => {});
+    };
+
     const log = (message: string) => {
         if (aborted) return;
         const logMsg = beijingTimeLog(message);
@@ -23,7 +32,7 @@ export function createLogStreamResponse(logFunction: (log: (message: string) => 
     if (signal) {
         signal.addEventListener('abort', () => {
             aborted = true;
-            writer.close().catch(() => {});
+            void safeClose();
         }, { once: true });
     }
 
@@ -34,9 +43,7 @@ export function createLogStreamResponse(logFunction: (log: (message: string) => 
             if (!aborted) log(`[FATAL_ERROR] ${e instanceof Error ? e.message : String(e)}`);
             console.error("Streaming log function error:", e instanceof Error ? e.stack : e);
         } finally {
-            try {
-                await writer.close();
-            } catch (e) {}
+            await safeClose();
         }
     })();
 
