@@ -4,7 +4,7 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { fetchIpsFromSource, syncSingleIpSource, FETCH_STRATEGIES } from "../src/sync/ip-sources.ts";
-import { syncDomainLogic, syncSystemDomains } from "../src/sync/domains.ts";
+import { syncDomainLogic, syncSystemDomains, resolveRecordsForDomain } from "../src/sync/domains.ts";
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -181,5 +181,75 @@ describe("syncDomainLogic JSON 兜底 (FIX-03)", () => {
 
         // 清理
         await env.WUYA.prepare("DELETE FROM domains WHERE target_domain = ?").bind("json-corrupt.example.com").run();
+    });
+});
+
+describe("resolveRecordsForDomain (FIX-14)", () => {
+    it("浅层克隆分支：源不是 CNAME 时抛错", async () => {
+        // 使用 is_deep_resolve=0 + 源无 CNAME → 期望抛"必须是一个CNAME记录"
+        vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+            if (url.includes("cloudflare-dns.com")) {
+                return new Response(JSON.stringify({ Status: 0, Answer: [] }), { status: 200 });
+            }
+            return new Response("{}", { status: 200 });
+        }));
+
+        const domain: {
+            source_domain: string;
+            target_domain: string;
+            zone_id: string;
+            is_deep_resolve: number;
+            ttl: number;
+            last_synced_records: string | null;
+            is_enabled: number;
+            is_system: number;
+            id: number;
+        } = {
+            id: 999,
+            source_domain: "no-cname-source.invalid",
+            target_domain: "x.example.com",
+            zone_id: "test-zone",
+            is_deep_resolve: 0,
+            ttl: 60,
+            last_synced_records: "[]",
+            is_enabled: 1,
+            is_system: 0,
+        };
+
+        await expect(resolveRecordsForDomain(domain, env.WUYA, () => {}, {})).rejects.toThrow(/必须是一个CNAME记录/);
+    });
+
+    it("internal:hostmonit:* 上下文命中缓存时不重复 fetch", async () => {
+        // 预填 syncContext.threeNetworkIps 让快速路径生效
+        vi.stubGlobal("fetch", vi.fn(async () => {
+            throw new Error("fetch should not be called when context cache hits");
+        }));
+
+        const domain: {
+            source_domain: string;
+            target_domain: string;
+            zone_id: string;
+            is_deep_resolve: number;
+            ttl: number;
+            last_synced_records: string | null;
+            is_enabled: number;
+            is_system: number;
+            id: number;
+        } = {
+            id: 999,
+            source_domain: "internal:hostmonit:yd",
+            target_domain: "x.example.com",
+            zone_id: "test-zone",
+            is_deep_resolve: 0,
+            ttl: 60,
+            last_synced_records: "[]",
+            is_enabled: 1,
+            is_system: 1,
+        };
+        const syncContext: Record<string, unknown> = {
+            threeNetworkIps: { yd: ["1.1.1.1"], dx: ["2.2.2.2"], lt: ["3.3.3.3"], source: "CloudFlareYes" },
+        };
+        const records = await resolveRecordsForDomain(domain, env.WUYA, () => {}, syncContext);
+        expect(records).toEqual([{ type: "A", content: "1.1.1.1" }]);
     });
 });

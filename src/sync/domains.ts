@@ -162,42 +162,49 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
     await syncLogic(noOpLog);
 }
 
-/** 核心同步逻辑：根据源域名解析出记录并写回 Cloudflare DNS */
+/**
+ * 根据域名配置解析需更新的 DNS 记录（三分支策略）
+ * - internal:hostmonit:*：系统内置三网优选 IP
+ * - is_deep_resolve=1：递归解析 CNAME 链
+ * - 否则：浅层克隆（源域名必须是 CNAME）
+ */
+export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database, log: LogFn, syncContext: Record<string, unknown>): Promise<DnsRecord[]> {
+    if (domain.source_domain.startsWith('internal:hostmonit:')) {
+        const type = domain.source_domain.split(':')[2];
+        const sourceName = await getSetting(db, 'THREE_NETWORK_SOURCE') || 'CloudFlareYes';
+        log(`模式: 系统内置源 (三网优选IP - ${type}, 来源: ${sourceName})`);
+        if (!syncContext.threeNetworkIps || (syncContext.threeNetworkIps as { source?: string }).source !== sourceName) {
+            log(`正在从 ${sourceName} 获取三网优选IP...`);
+            const fetched = await fetchThreeNetworkIps(sourceName, log);
+            const totalCount = fetched.yd.length + fetched.dx.length + fetched.lt.length;
+            if (totalCount > 0) {
+                // 仅在成功获取 IP 时才缓存（避免失败空对象污染后续同批域名）
+                syncContext.threeNetworkIps = { ...fetched, source: sourceName };
+                log(`获取成功: 移动(${fetched.yd.length}) 电信(${fetched.dx.length}) 联通(${fetched.lt.length})`);
+            } else {
+                log(`未获取到任何三网IP，下次同步将重新尝试。`);
+                delete syncContext.threeNetworkIps;
+            }
+        }
+        const ips = (syncContext.threeNetworkIps as { [k: string]: string[] })[type] || [];
+        return ips.map(ip => ({ type: 'A', content: ip }));
+    }
+    if (domain.is_deep_resolve) {
+        log(`模式: 深度解析 (追踪CNAME)`);
+        return await resolveRecursively(domain.source_domain, log);
+    }
+    log(`模式: 浅层克隆 (直接克隆CNAME)`);
+    const cnames = await getDnsFromDoh(domain.source_domain, 'CNAME');
+    if (cnames.length > 0) return [{ type: 'CNAME', content: cnames[0].replace(/\.$/, "") }];
+    throw new Error(`在浅层克隆模式下，源域名 ${domain.source_domain} 必须是一个CNAME记录。`);
+}
+
+/** 核心同步逻辑：解析 → 比对 → 写回 Cloudflare DNS → 状态更新 */
 export async function syncDomainLogic(domain: DomainRow, token: string, zoneId: string, db: D1Database, log: LogFn, syncContext: Record<string, unknown>): Promise<void> {
     log(`======== 开始同步: ${domain.target_domain} ========`);
     try {
         let recordsToUpdate: DnsRecord[] | undefined;
-        if (domain.source_domain.startsWith('internal:hostmonit:')) {
-            const type = domain.source_domain.split(':')[2];
-            const sourceName = await getSetting(db, 'THREE_NETWORK_SOURCE') || 'CloudFlareYes';
-            log(`模式: 系统内置源 (三网优选IP - ${type}, 来源: ${sourceName})`);
-            if (!syncContext.threeNetworkIps || (syncContext.threeNetworkIps as { source?: string }).source !== sourceName) {
-                log(`正在从 ${sourceName} 获取三网优选IP...`);
-                const fetched = await fetchThreeNetworkIps(sourceName, log);
-                const totalCount = fetched.yd.length + fetched.dx.length + fetched.lt.length;
-                if (totalCount > 0) {
-                    // 仅在成功获取 IP 时才缓存（避免失败空对象污染后续同批域名）
-                    syncContext.threeNetworkIps = { ...fetched, source: sourceName };
-                    log(`获取成功: 移动(${fetched.yd.length}) 电信(${fetched.dx.length}) 联通(${fetched.lt.length})`);
-                } else {
-                    log(`未获取到任何三网IP，下次同步将重新尝试。`);
-                    delete syncContext.threeNetworkIps;
-                }
-            }
-            const ips = (syncContext.threeNetworkIps as { [k: string]: string[] })[type] || [];
-            recordsToUpdate = ips.map(ip => ({ type: 'A', content: ip }));
-        } else if (domain.is_deep_resolve) {
-            log(`模式: 深度解析 (追踪CNAME)`);
-            recordsToUpdate = await resolveRecursively(domain.source_domain, log);
-        } else {
-            log(`模式: 浅层克隆 (直接克隆CNAME)`);
-            const cnames = await getDnsFromDoh(domain.source_domain, 'CNAME');
-            if (cnames.length > 0) {
-                recordsToUpdate = [{ type: 'CNAME', content: cnames[0].replace(/\.$/, "") }];
-            } else {
-                throw new Error(`在浅层克隆模式下，源域名 ${domain.source_domain} 必须是一个CNAME记录。`);
-            }
-        }
+        recordsToUpdate = await resolveRecordsForDomain(domain, db, log, syncContext);
 
         if (!recordsToUpdate || recordsToUpdate.length === 0) {
             let lastRecords: DnsRecord[] = [];
