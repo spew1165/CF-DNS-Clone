@@ -21,22 +21,19 @@ export default defineProject({
         maxWorkers: 1,
         fileParallelism: true,
         coverage: {
-            provider: "v8",
+            // workerd 运行时没有 node:inspector，v8 provider 无法工作，
+            // Cloudflare 官方要求使用 istanbul 插桩式覆盖率。
+            provider: "istanbul",
             reporter: ["text", "html", "lcov"],
             include: ["src/**/*.ts"],
             exclude: ["src/ui/**", "src/index.js"],
             // 阶段 2 起始阈值：FIX-10 落地后逐步提升
-            // 注意：vitest-pool-workers 沙箱下 v8 coverage 暂时不覆盖 worker 内部模块，
-            // 现以 0% 起步跑通 setup；待 worker 引入 source maps 后逐步收紧。
             thresholds: {
                 lines: 0,
                 functions: 0,
                 statements: 0,
                 branches: 0,
             },
-            // 沙箱下 v8 coverage 暂不覆盖：threshold 0 仍可能触发 vitest 内部零覆盖率警告，
-            // 这里显式跳过阈值断言（保留 reporter 供人工查看）
-            // 检查脚本可改用：vitest run --coverage --coverage.thresholds.lines=0
         },
     },
 });
