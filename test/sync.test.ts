@@ -142,3 +142,44 @@ describe("syncSystemDomains (FIX-02: 错误日志替代静默)", () => {
         await env.WUYA.prepare("DELETE FROM domains WHERE target_domain = ?").bind("sys-catch-test.example.com").run();
     });
 });
+
+describe("syncDomainLogic JSON 兜底 (FIX-03)", () => {
+    it("last_synced_records JSON 损坏时不抛 SyntaxError，按空数组处理", async () => {
+        // 插入一个上次记录被破坏的 domain
+        // is_deep_resolve=1 + 不存在源 → DoH 返回空 → recordsToUpdate.length === 0
+        // → 进入 lastRecords 分支 → JSON.parse('{broken-json') 损坏 → 期望 catch 兜底
+        await env.WUYA.prepare(
+            "INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, last_synced_records, is_enabled) VALUES (?, ?, ?, 1, ?, 1)"
+        ).bind("nonexistent-source.invalid", "json-corrupt.example.com", "test-zone-id", "{broken-json").run();
+
+        // stub fetch：所有 DoH 查询返回空 Answer
+        vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+            if (url.includes("cloudflare-dns.com")) {
+                return new Response(JSON.stringify({ Status: 0, Answer: [] }), { status: 200 });
+            }
+            return new Response("{}", { status: 200 });
+        }));
+
+        const row = await env.WUYA.prepare(
+            "SELECT * FROM domains WHERE target_domain = ?"
+        ).bind("json-corrupt.example.com").first() as { id: number; source_domain: string; target_domain: string; zone_id: string; is_deep_resolve: number; ttl: number; last_synced_records: string | null; is_enabled: number; is_system: number };
+
+        const logs: string[] = [];
+        const log = (m: string) => { logs.push(m); };
+
+        // 不应抛 SyntaxError
+        await expect(syncDomainLogic(row, "test-cf-token", "test-zone-id", env.WUYA, log, {})).resolves.toBeUndefined();
+
+        // 关键断言：日志中含"字段损坏"
+        expect(logs.some(l => l.includes("字段损坏"))).toBe(true);
+
+        // 验证 D1 中 last_sync_status='no_change'（按空数组处理后走内容一致路径）
+        const updated = await env.WUYA.prepare(
+            "SELECT last_sync_status FROM domains WHERE id = ?"
+        ).bind(row.id).first() as { last_sync_status: string };
+        expect(updated.last_sync_status).toBe("no_change");
+
+        // 清理
+        await env.WUYA.prepare("DELETE FROM domains WHERE target_domain = ?").bind("json-corrupt.example.com").run();
+    });
+});

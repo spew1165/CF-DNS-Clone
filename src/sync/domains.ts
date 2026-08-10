@@ -201,7 +201,12 @@ export async function syncDomainLogic(domain: DomainRow, token: string, zoneId: 
         }
 
         if (!recordsToUpdate || recordsToUpdate.length === 0) {
-            const lastRecords = JSON.parse(domain.last_synced_records || '[]');
+            let lastRecords: DnsRecord[] = [];
+            try {
+                lastRecords = JSON.parse(domain.last_synced_records || '[]') as DnsRecord[];
+            } catch {
+                log(`last_synced_records 字段损坏（域名 ${domain.target_domain}），按空数组处理。`);
+            }
             if (lastRecords.length === 0) {
                 log(`源域名 ${domain.source_domain} 未找到任何记录，与上次同步结果一致，无需操作。`);
                 await db.prepare("UPDATE domains SET last_synced_time = CURRENT_TIMESTAMP, last_sync_status = 'no_change', last_sync_error = NULL WHERE id = ?").bind(domain.id).run();
