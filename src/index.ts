@@ -30,12 +30,14 @@ export default {
           return await handleUiRequest(request, env);
       } catch (e) {
           console.error("Global Catch:", e instanceof Error ? e.stack : e);
-          const errorResponse = { error: "发生意外的服务器错误。", details: e instanceof Error ? e.message : String(e) };
           const status = (e as { status?: number }).status || 500;
           if (path.startsWith('/api/')) {
+              // API 路径：返回结构化错误（details 仅含 message，不含 stack）
+              const errorResponse = { error: "发生意外的服务器错误。", details: e instanceof Error ? e.message : String(e) };
               return jsonResponse(errorResponse, status);
           }
-          return new Response(`错误: ${e instanceof Error ? e.message : String(e)}\n${e instanceof Error ? e.stack : ''}`, { status });
+          // 非 API 路径：固定文案，杜绝 stack / 凭据泄露
+          return new Response("服务器内部错误，请稍后重试。", { status: 500 });
       }
   },
   async scheduled(controller: ScheduledController, env: { WUYA: D1Database }, ctx: ExecutionContext): Promise<void> {
