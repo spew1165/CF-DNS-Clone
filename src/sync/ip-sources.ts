@@ -191,7 +191,7 @@ export async function fetchIpsFromSource(source: IpSourceRow, db?: D1Database): 
     throw new Error(`所有抓取策略均未能从该URL获取到IP${detail}，请检查URL或在添加/编辑IP源时重新探测。`);
 }
 
-/** 三大运营商 IP 抓取（hostmonit HTML 表格解析） */
+/** 三大运营商 IP 抓取（hostmonit HTML 表格解析）。失败抛错，由调用方决定是否降级。 */
 export async function fetchThreeNetworkIps(source: string, log: (msg: string) => void): Promise<{ yd: string[]; dx: string[]; lt: string[] }> {
     log(`正在从源 [${source}] 获取IP...`);
 
@@ -228,38 +228,33 @@ export async function fetchThreeNetworkIps(source: string, log: (msg: string) =>
         return { yd: Array.from(ips.yd), dx: Array.from(ips.dx), lt: Array.from(ips.lt) };
     }
 
-    try {
-        let url: string;
-        let usePhantom = false;
-        switch (source) {
-            case 'api.uouin.com':
-                url = 'https://api.uouin.com/cloudflare.html';
-                break;
-            case 'wetest.vip':
-                url = 'https://www.wetest.vip/page/cloudflare/address_v4.html';
-                break;
-            case 'CloudFlareYes':
-            default:
-                url = 'https://stock.hostmonit.com/CloudFlareYes';
-                usePhantom = true;
-                break;
-        }
-
-        const res = usePhantom
-            ? await fetchWithTimeout('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ url, renderType: 'html' })
-              }, 20000)
-            : await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 15000);
-        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-
-        const htmlContent = await res.text();
-        const result = await parseHtmlTableWithOperator(htmlContent);
-        log(`从 [${source}] 获取到 ${result.yd.length + result.dx.length + result.lt.length} 个IP。`);
-        return result;
-    } catch (e) {
-        log(`从源 [${source}] 获取IP失败: ${e instanceof Error ? e.message : String(e)}`);
-        return { yd: [], dx: [], lt: [] };
+    let url: string;
+    let usePhantom = false;
+    switch (source) {
+        case 'api.uouin.com':
+            url = 'https://api.uouin.com/cloudflare.html';
+            break;
+        case 'wetest.vip':
+            url = 'https://www.wetest.vip/page/cloudflare/address_v4.html';
+            break;
+        case 'CloudFlareYes':
+        default:
+            url = 'https://stock.hostmonit.com/CloudFlareYes';
+            usePhantom = true;
+            break;
     }
+
+    const res = usePhantom
+        ? await fetchWithTimeout('https://PhantomJsCloud.com/api/browser/v2/a-demo-key-with-low-quota-per-ip-address/', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url, renderType: 'html' })
+          }, 20000)
+        : await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 15000);
+    if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+
+    const htmlContent = await res.text();
+    const result = await parseHtmlTableWithOperator(htmlContent);
+    log(`从 [${source}] 获取到 ${result.yd.length + result.dx.length + result.lt.length} 个IP。`);
+    return result;
 }

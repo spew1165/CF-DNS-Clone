@@ -340,4 +340,67 @@ describe("resolveRecordsForDomain (FIX-14)", () => {
         const records = await resolveRecordsForDomain(domain, env.WUYA, () => {}, {});
         expect(records).toEqual([]);
     });
+
+    it("internal:hostmonit:* fetch 抛错时保留上次成功缓存（FIX-16）", async () => {
+        // 预填 syncContext.threeNetworkIps（模拟"上一次同步成功"），
+        // 再让 fetch 抛错 → 期望不 delete 缓存，仍能返回旧 IP
+        vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network boom"); }));
+
+        const domain: {
+            source_domain: string;
+            target_domain: string;
+            zone_id: string;
+            is_deep_resolve: number;
+            ttl: number;
+            last_synced_records: string | null;
+            is_enabled: number;
+            is_system: number;
+            id: number;
+        } = {
+            id: 999,
+            source_domain: "internal:hostmonit:yd",
+            target_domain: "x.example.com",
+            zone_id: "test-zone",
+            is_deep_resolve: 0,
+            ttl: 60,
+            last_synced_records: "[]",
+            is_enabled: 1,
+            is_system: 1,
+        };
+
+        const syncContext: Record<string, unknown> = {
+            threeNetworkIps: { yd: ["9.9.9.9"], dx: ["8.8.8.8"], lt: ["7.7.7.7"], source: "CloudFlareYes" },
+        };
+
+        const records = await resolveRecordsForDomain(domain, env.WUYA, () => {}, syncContext);
+        expect(records).toEqual([{ type: "A", content: "9.9.9.9" }]);
+    });
+
+    it("internal:hostmonit:* fetch 抛错且无旧缓存时向上抛错（FIX-16）", async () => {
+        vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network boom"); }));
+
+        const domain: {
+            source_domain: string;
+            target_domain: string;
+            zone_id: string;
+            is_deep_resolve: number;
+            ttl: number;
+            last_synced_records: string | null;
+            is_enabled: number;
+            is_system: number;
+            id: number;
+        } = {
+            id: 999,
+            source_domain: "internal:hostmonit:yd",
+            target_domain: "x.example.com",
+            zone_id: "test-zone",
+            is_deep_resolve: 0,
+            ttl: 60,
+            last_synced_records: "[]",
+            is_enabled: 1,
+            is_system: 1,
+        };
+
+        await expect(resolveRecordsForDomain(domain, env.WUYA, () => {}, {})).rejects.toThrow(/network boom/);
+    });
 });

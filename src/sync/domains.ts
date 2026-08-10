@@ -175,15 +175,22 @@ export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database,
         log(`模式: 系统内置源 (三网优选IP - ${type}, 来源: ${sourceName})`);
         if (!syncContext.threeNetworkIps || (syncContext.threeNetworkIps as { source?: string }).source !== sourceName) {
             log(`正在从 ${sourceName} 获取三网优选IP...`);
-            const fetched = await fetchThreeNetworkIps(sourceName, log);
-            const totalCount = fetched.yd.length + fetched.dx.length + fetched.lt.length;
-            if (totalCount > 0) {
-                // 仅在成功获取 IP 时才缓存（避免失败空对象污染后续同批域名）
-                syncContext.threeNetworkIps = { ...fetched, source: sourceName };
-                log(`获取成功: 移动(${fetched.yd.length}) 电信(${fetched.dx.length}) 联通(${fetched.lt.length})`);
-            } else {
-                log(`未获取到任何三网IP，下次同步将重新尝试。`);
-                delete syncContext.threeNetworkIps;
+            try {
+                const fetched = await fetchThreeNetworkIps(sourceName, log);
+                const totalCount = fetched.yd.length + fetched.dx.length + fetched.lt.length;
+                if (totalCount > 0) {
+                    // 仅在成功获取 IP 时才缓存（避免失败空对象污染后续同批域名）
+                    syncContext.threeNetworkIps = { ...fetched, source: sourceName };
+                    log(`获取成功: 移动(${fetched.yd.length}) 电信(${fetched.dx.length}) 联通(${fetched.lt.length})`);
+                } else {
+                    log(`未获取到任何三网IP，下次同步将重新尝试。`);
+                    delete syncContext.threeNetworkIps;
+                }
+            } catch (e) {
+                // FIX-16: 网络故障时保留上次成功缓存，让同批后续域名仍能完成同步
+                // 若从未成功过（无旧缓存），向上抛错由 syncDomainLogic 标 failed
+                log(`网络故障，使用上次成功缓存（如有）: ${e instanceof Error ? e.message : String(e)}`);
+                if (!syncContext.threeNetworkIps) throw e;
             }
         }
         // FIX-15: 上游源返回 0 IP 时 syncContext.threeNetworkIps 已被 delete，
