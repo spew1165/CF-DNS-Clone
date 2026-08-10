@@ -42,8 +42,12 @@ export function createLogStreamResponse(logFunction: (log: (message: string) => 
         try {
             await logFunction(log);
         } catch (e) {
-            if (!aborted) log(`[FATAL_ERROR] ${e instanceof Error ? e.message : String(e)}`);
-            console.error("Streaming log function error:", e instanceof Error ? e.stack : e);
+            if (!aborted) {
+                log(`[FATAL_ERROR] ${e instanceof Error ? e.message : String(e)}`);
+                // 上游（sync* 系列函数）通常已经通过 log() 把失败原因告知了用户，
+                // 并将状态写回了 D1。这里把错误降级为控制台 warn，避免误导为"崩溃"。
+                console.warn(`Streaming log function ended with error: ${e instanceof Error ? e.message : String(e)}`);
+            }
         } finally {
             await safeClose();
         }

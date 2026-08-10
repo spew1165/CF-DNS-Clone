@@ -34,7 +34,62 @@ describe("fetchIpsFromSource multi-source fallback", () => {
             github_path: "empty.txt",
             commit_message: "update",
             fetch_strategy: "direct_regex",
-        })).rejects.toThrow("No IPs found");
+        })).rejects.toThrow("所有抓取策略均未能从该URL获取到IP");
+    });
+
+    it("falls back to another strategy when primary fails", async () => {
+        let callCount = 0;
+        vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+            callCount++;
+            if (url.startsWith("https://PhantomJsCloud.com")) {
+                // 主策略（phantomjs_cloud）返回无 IP
+                return new Response("no ips here", { status: 200 });
+            }
+            // 回退策略（direct_regex）返回有 IP
+            return new Response("10.0.0.1\n10.0.0.2", { status: 200 });
+        }));
+        const source = {
+            id: 99,
+            url: "https://example.com/ips.txt",
+            github_path: "fallback-test.txt",
+            commit_message: "update",
+            fetch_strategy: "phantomjs_cloud",
+        };
+        const ips = await fetchIpsFromSource(source);
+        expect(ips).toEqual(["10.0.0.1", "10.0.0.2"]);
+        // fetchIpsFromSource 会就地更新 source.fetch_strategy
+        expect(source.fetch_strategy).toBe("direct_regex");
+        expect(callCount).toBeGreaterThan(1);
+    });
+
+    it("persists new strategy to db when fallback succeeds (db provided)", async () => {
+        const uniquePath = `fallback-db-${crypto.randomUUID()}.txt`;
+        await env.WUYA.prepare(
+            "INSERT INTO ip_sources (url, github_path, commit_message, fetch_strategy) VALUES (?, ?, ?, ?)"
+        ).bind("https://fallback-db.example.com/ips.txt", uniquePath, "update", "phantomjs_cloud").run();
+        const row = await env.WUYA.prepare(
+            "SELECT * FROM ip_sources WHERE github_path = ?"
+        ).bind(uniquePath).first() as { id: number; url: string; github_path: string; commit_message: string; fetch_strategy: string; is_enabled: number };
+
+        let callCount = 0;
+        vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+            callCount++;
+            if (url.startsWith("https://PhantomJsCloud.com")) {
+                return new Response("no ips", { status: 200 });
+            }
+            return new Response("192.168.1.1\n192.168.1.2", { status: 200 });
+        }));
+
+        const ips = await fetchIpsFromSource(row, env.WUYA);
+        expect(ips).toEqual(["192.168.1.1", "192.168.1.2"]);
+
+        // 验证 DB 中策略已被更新
+        const updated = await env.WUYA.prepare(
+            "SELECT fetch_strategy FROM ip_sources WHERE id = ?"
+        ).bind(row.id).first() as { fetch_strategy: string };
+        expect(updated.fetch_strategy).toBe("direct_regex");
+
+        await env.WUYA.prepare("DELETE FROM ip_sources WHERE id = ?").bind(row.id).run();
     });
 });
 

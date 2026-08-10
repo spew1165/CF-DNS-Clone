@@ -103,7 +103,7 @@ export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, 
         log(`======== 开始同步IP源: ${source.url} ========`);
 
         try {
-            const ips = await fetchIpsFromSource(source);
+            const ips = await fetchIpsFromSource(source, db);
             log(`成功获取 ${ips.length} 个IP。`);
 
             const newContent = ips.join('\n');
@@ -127,7 +127,7 @@ export async function syncSingleIpSource(id: number, env: { WUYA: D1Database }, 
         }
     };
 
-    await runWithOptionalLog(syncLogic, returnLogs, signal);
+    return await runWithOptionalLog(syncLogic, returnLogs, signal);
 }
 
 /** 批量同步全部启用 IP 源 */
@@ -152,26 +152,43 @@ export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: bo
     await syncLogic(noOpLog);
 }
 
-/** 按策略抓取 IP（带排序） */
-export async function fetchIpsFromSource(source: IpSourceRow): Promise<string[]> {
+/** 按策略抓取 IP（带排序 + 失败自动回退） */
+export async function fetchIpsFromSource(source: IpSourceRow, db?: D1Database): Promise<string[]> {
     assertSafeHttpUrl(source.url);
-    const strategyFn = FETCH_STRATEGIES[source.fetch_strategy];
-    if (!strategyFn) {
-        throw new Error(`Unknown fetch strategy: ${source.fetch_strategy}`);
-    }
-    const ips = await strategyFn(source.url);
-    if (!ips || ips.length === 0) {
-        throw new Error('No IPs found using the cached strategy.');
-    }
-    const sortIps = (a: string, b: string) => {
-        const aParts = a.split('.').map(Number);
-        const bParts = b.split('.').map(Number);
-        for (let i = 0; i < 4; i++) {
-            if (aParts[i] !== bParts[i]) return aParts[i] - bParts[i];
+    // 构造尝试顺序：缓存策略优先，回退策略按声明顺序依次尝试
+    const strategyNames = Object.keys(FETCH_STRATEGIES);
+    const orderedNames = [source.fetch_strategy, ...strategyNames.filter(n => n !== source.fetch_strategy)];
+
+    let lastError: unknown;
+    for (const name of orderedNames) {
+        const fn = FETCH_STRATEGIES[name];
+        if (!fn) continue;
+        try {
+            const ips = await fn(source.url);
+            if (ips && ips.length > 0) {
+                if (name !== source.fetch_strategy) {
+                    // 回退策略命中：更新传入对象的 fetch_strategy（调用方可感知），若提供了 db 则持久化
+                    (source as { fetch_strategy: string }).fetch_strategy = name;
+                    if (db) {
+                        await db.prepare("UPDATE ip_sources SET fetch_strategy = ? WHERE id = ?").bind(name, source.id).run();
+                    }
+                }
+                const sortIps = (a: string, b: string) => {
+                    const aParts = a.split('.').map(Number);
+                    const bParts = b.split('.').map(Number);
+                    for (let i = 0; i < 4; i++) {
+                        if (aParts[i] !== bParts[i]) return aParts[i] - bParts[i];
+                    }
+                    return 0;
+                };
+                return ips.sort(sortIps);
+            }
+        } catch (e) {
+            lastError = e;
         }
-        return 0;
-    };
-    return ips.sort(sortIps);
+    }
+    const detail = lastError instanceof Error ? `（最后错误：${lastError.message}）` : '';
+    throw new Error(`所有抓取策略均未能从该URL获取到IP${detail}，请检查URL或在添加/编辑IP源时重新探测。`);
 }
 
 /** 三大运营商 IP 抓取（hostmonit HTML 表格解析） */

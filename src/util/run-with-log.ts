@@ -9,11 +9,11 @@ type LogFn = (msg: string) => void;
  * - returnLogs=true：返回 SSE Response，将日志实时推给客户端
  * - returnLogs=false：直接执行，noOpLog 写到 console.log
  */
-export function runWithOptionalLog<T>(
-    logic: (log: LogFn) => Promise<T>,
+export function runWithOptionalLog(
+    logic: (log: LogFn) => Promise<void>,
     returnLogs: boolean,
     signal?: AbortSignal,
-): Response | Promise<T> {
+): Response | Promise<void> {
     if (returnLogs) return createLogStreamResponse(logic, signal);
     return logic((msg) => console.log(beijingTimeLog(msg)));
 }

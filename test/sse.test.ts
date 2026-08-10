@@ -39,7 +39,7 @@ describe("createLogStreamResponse", () => {
     });
 
     it("logFunction 抛错时推送 [FATAL_ERROR] 帧并正常关闭流", async () => {
-        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const res = createLogStreamResponse(async (log) => {
             log("开始");
@@ -50,7 +50,8 @@ describe("createLogStreamResponse", () => {
         expect(lines[0]).toContain("开始");
         expect(lines[1]).toContain("[FATAL_ERROR]");
         expect(lines[1]).toContain("同步任务炸了");
-        expect(errorSpy).toHaveBeenCalled();
+        // 错误已通过 [FATAL_ERROR] 帧推送给客户端，服务端仅 console.warn（降级，不再误报崩溃）
+        expect(warnSpy).toHaveBeenCalled();
     });
 
     it("非 Error 抛出物（如字符串）也能被安全序列化", async () => {

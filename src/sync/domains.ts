@@ -99,7 +99,7 @@ export async function syncSingleDomain(id: number, env: { WUYA: D1Database }, re
         await syncDomainLogic(domain, token, zoneId, db, log, syncContext);
     };
 
-    await runWithOptionalLog(syncLogic, returnLogs, signal);
+    return await runWithOptionalLog(syncLogic, returnLogs, signal);
 }
 
 /** 批量同步全部启用域名 */
