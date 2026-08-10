@@ -6,6 +6,7 @@ import { getCurrentGitHubContent, updateFileOnGitHub } from './github.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
 import { fetchWithTimeout } from '../util/fetch.ts';
+import { assertSafeHttpUrl } from '../util/url-safety.ts';
 
 interface IpSourceRow {
     id: number;
@@ -154,6 +155,7 @@ export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: bo
 
 /** 按策略抓取 IP（带排序） */
 export async function fetchIpsFromSource(source: IpSourceRow): Promise<string[]> {
+    assertSafeHttpUrl(source.url);
     const strategyFn = FETCH_STRATEGIES[source.fetch_strategy];
     if (!strategyFn) {
         throw new Error(`Unknown fetch strategy: ${source.fetch_strategy}`);

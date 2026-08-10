@@ -9,6 +9,7 @@ import { getZoneName } from '../util/cf.ts';
 import { FETCH_STRATEGIES } from '../sync/ip-sources.ts';
 import { syncAllDomains, syncSystemDomains, syncSingleDomain } from '../sync/domains.ts';
 import { syncSingleIpSource, syncAllIpSources } from '../sync/ip-sources.ts';
+import { assertSafeHttpUrl } from '../util/url-safety.ts';
 
 /** 敏感字段：序列化到前端前过滤 */
 const SENSITIVE_SETTINGS_KEYS = new Set([
@@ -268,6 +269,11 @@ async function apiAddIpSource(request: Request, db: D1Database): Promise<Respons
         return jsonResponse({ error: '缺少必填字段或尚未成功探测获取策略。' }, 400);
     }
     try {
+        assertSafeHttpUrl(url);
+    } catch (e) {
+        return jsonResponse({ error: e instanceof Error ? e.message : 'URL 校验失败' }, 400);
+    }
+    try {
         await db.prepare("INSERT INTO ip_sources (url, github_path, commit_message, fetch_strategy) VALUES (?, ?, ?, ?)")
             .bind(url, github_path, commit_message, fetch_strategy).run();
         return jsonResponse({ success: true, message: 'IP源添加成功。' });
@@ -283,6 +289,11 @@ async function apiUpdateIpSource(request: Request, db: D1Database, id: number): 
     };
     if (!url || !github_path || !commit_message || !fetch_strategy) {
         return jsonResponse({ error: '缺少必填字段或尚未成功探测获取策略。' }, 400);
+    }
+    try {
+        assertSafeHttpUrl(url);
+    } catch (e) {
+        return jsonResponse({ error: e instanceof Error ? e.message : 'URL 校验失败' }, 400);
     }
     try {
         await db.prepare("UPDATE ip_sources SET url=?, github_path=?, commit_message=?, fetch_strategy=? WHERE id=?")
@@ -302,6 +313,11 @@ async function apiDeleteIpSource(db: D1Database, id: number): Promise<Response> 
 async function apiProbeIpSource(request: Request): Promise<Response> {
     const { url } = await request.json() as { url?: string };
     if (!url) return jsonResponse({ error: 'URL is required for probing.' }, 400);
+    try {
+        assertSafeHttpUrl(url);
+    } catch (e) {
+        return jsonResponse({ error: e instanceof Error ? e.message : 'URL 校验失败' }, 400);
+    }
 
     for (const [strategyName, strategyFn] of Object.entries(FETCH_STRATEGIES)) {
         try {
