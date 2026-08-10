@@ -131,6 +131,63 @@
 </div>
 
 
+---
+
+## 🛠️ 开发者模式（可选，CLI 本地调试 / 部署）
+
+> 以下内容**仅供开发者**使用。普通用户按上面的 4 步网页部署流程即可，无需安装任何工具。
+
+### 环境要求
+
+| 工具 | 版本要求 | 说明 |
+| ---- | -------- | ---- |
+| Node.js | ≥ 22（推荐 24） | 项目要求 `engines.node >= 22` |
+| pnpm | ≥ 11 | 直接安装（或 `corepack enable` 后使用） |
+| Cloudflare 账号 | —— | 需要 API Token（"编辑区域 DNS"模板） |
+
+> Windows 11 原生支持，无需 WSL。
+
+### 本地开发（`pnpm dev`）
+
+```bash
+# 1. 安装 Node 24（推荐用 nvm / fnm）
+nvm install 24 && nvm use
+
+# 2. 启用 pnpm（如已安装可跳过）
+corepack enable
+
+# 3. 安装依赖（首次）
+pnpm install
+
+# 4. 启动本地 workerd 调试环境
+pnpm dev
+```
+
+- 访问 `http://localhost:8787` 即可进入后台。
+- 本地 D1 数据存放在 `.wrangler/state/d1/`，与线上数据库隔离。
+- 所有配置（含 Token）仍在后台设置页面填写并存入本地 D1，无需 `.dev.vars`。
+
+### CLI 部署（`pnpm deploy`）
+
+> 先用 `wrangler d1 create` 创建生产 D1 数据库，拿到真实 UUID。
+
+```bash
+# 1. 创建生产 D1 数据库（记下输出的 database_id）
+pnpm dlx wrangler d1 create wuya-db
+
+# 2. 将返回的 UUID 填入 wrangler.jsonc 的 database_id
+#    （替换占位符 REPLACE_WITH_YOUR_D1_ID）
+
+# 3. 部署前校验（占位符未替换会报错退出）
+pnpm predeploy
+
+# 4. 部署到 Cloudflare
+pnpm deploy
+```
+
+> **注意**：`wrangler.jsonc` 已配置 `keep_vars: true`，不会覆盖你在
+> Dashboard 里手动配置的 Variables / Bindings。CLI 部署与网页部署两条路径可混用。
+
 ### ⚠️ **【重要声明】** ⚠️
 
 本项目/本教程中的所有代码和信息仅供学习和研究之用。

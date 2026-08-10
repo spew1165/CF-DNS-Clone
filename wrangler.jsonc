@@ -1,0 +1,17 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "cf-dns-clone",
+    "main": "src/index.js",
+    "compatibility_date": "2026-01-15",
+    "keep_vars": true,
+    "observability": { "enabled": true },
+    "triggers": { "crons": ["* * * * *"] },
+    "d1_databases": [
+        {
+            "binding": "WUYA",
+            "database_name": "wuya-db",
+            "database_id": "REPLACE_WITH_YOUR_D1_ID",
+            "migrations_dir": "src/db/migrations"
+        }
+    ]
+}

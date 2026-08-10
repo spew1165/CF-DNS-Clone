@@ -1,0 +1,13 @@
+# CF-DNS-Clone 本地开发 Secrets（勿提交，.gitignore 已排除）
+#
+# 注意：本项目所有配置（含 Token）均存储于 D1 数据库中。
+# 本地 dev 时，`wrangler dev` 自动创建 `.wrangler/state/d1/` 下的本地 D1 副本。
+# 首次启动后访问 /admin 按引导写入以下配置即可：
+#
+#   - CF_API_TOKEN   — Cloudflare API 令牌（"编辑区域 DNS"模板）
+#   - CF_ZONE_ID     — Cloudflare 区域（Zone）ID
+#   - GITHUB_TOKEN   — GitHub Personal Access Token（repo 权限）
+#   - GITHUB_OWNER   — GitHub 用户名
+#   - GITHUB_REPO    — GitHub 仓库名（用于 IP 聚合推送）
+#
+# 无需在此文件填入任何值——所有配置经 Worker 后台设置页面存入 D1。
