@@ -11,7 +11,7 @@
     },
     "scripts": {
         "dev": "wrangler dev",
-        "deploy": "wrangler deploy",
+        "deploy": "node scripts/load-deploy-env.cjs",
         "predeploy": "node scripts/predeploy.cjs",
         "build:single": "node scripts/build-single-file.mjs",
         "cf-typegen": "wrangler types",
