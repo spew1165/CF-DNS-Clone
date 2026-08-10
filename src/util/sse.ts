@@ -12,7 +12,9 @@ export function createLogStreamResponse(logFunction: (log: (message: string) => 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
     const encoder = new TextEncoder();
-    let aborted = false;
+    // 初值取 signal 当前状态：客户端在 handler 进入前已断开时，
+    // addEventListener('abort') 不会再触发，只能靠初值拦截
+    let aborted = signal?.aborted ?? false;
     let closed = false;
 
     // 单一 close 路径：避免 abort 与 finally 双重 close 引发的 TypeError（FIX-09）
