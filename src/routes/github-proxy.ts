@@ -17,7 +17,8 @@ export async function handleGitHubFileProxy(fileName: string, env: { WUYA: D1Dat
         return new Response('GitHub settings are not configured on the server.', { status: 500 });
     }
 
-    const cache = caches.default;
+    // Cloudflare Workers 运行时的 caches.default（标准 DOM 的 CacheStorage 接口不含此字段）。
+    const cache = (caches as unknown as { default: Cache }).default;
     const cacheKey = new Request(new URL(fileName, "https://github-proxy.cache").toString());
     let response = await cache.match(cacheKey);
 
