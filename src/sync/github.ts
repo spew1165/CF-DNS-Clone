@@ -2,6 +2,7 @@
 // 从 index.legacy.js 提取（原 1237-1310 行）
 
 import { fetchWithRetry } from '../util/fetch.ts';
+import { HttpError } from '../util/http-error.ts';
 
 /** GitHub API 请求统一封装 */
 async function githubApiRequest(url: string, token: string, options: RequestInit = {}): Promise<Response> {
@@ -14,7 +15,7 @@ async function githubApiRequest(url: string, token: string, options: RequestInit
     const response = await fetchWithRetry(url, { ...options, headers }, 1, 15000);
     if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: response.statusText })) as { message?: string };
-        throw new Error(`GitHub API error (${response.status}): ${errorData.message ?? response.statusText}`);
+        throw new HttpError(response.status, `GitHub API error (${response.status}): ${errorData.message ?? response.statusText}`);
     }
     return response;
 }
@@ -26,7 +27,7 @@ export async function ensureRepoExists(token: string, owner: string, repo: strin
         await githubApiRequest(repoUrl, token);
         log(`仓库 '${owner}/${repo}' 已存在。`);
     } catch (e) {
-        if (e instanceof Error && e.message.includes('404')) {
+        if (e instanceof HttpError && e.status === 404) {
             log(`仓库 '${owner}/${repo}' 不存在，正在尝试创建...`);
             const createUrl = `https://api.github.com/user/repos`;
             const body = JSON.stringify({
@@ -57,7 +58,7 @@ export async function getCurrentGitHubContent({ token, owner, repo, path, log }:
         });
         return await response.text();
     } catch (e) {
-        if (e instanceof Error && e.message.includes('404')) {
+        if (e instanceof HttpError && e.status === 404) {
             log(`GitHub文件 '${path}' 不存在，将创建新文件。`);
             return null;
         }
@@ -84,7 +85,7 @@ export async function updateFileOnGitHub({ token, owner, repo, path, content, me
         const fileData = await getFileResponse.json() as { sha: string };
         sha = fileData.sha;
     } catch (e) {
-        if (!(e instanceof Error && e.message.includes('404'))) throw e;
+        if (!(e instanceof HttpError && e.status === 404)) throw e;
     }
 
     const body = JSON.stringify({
