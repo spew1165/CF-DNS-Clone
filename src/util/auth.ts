@@ -41,6 +41,9 @@ export async function legacyHashPassword(password: string, salt: string): Promis
 
 /**
  * 校验密码（兼容旧哈希）；返回 matched + 旧格式升级所需的新 hash（仅当匹配且为 legacy 时返回）
+ *
+ * 语义契约：`upgradedHash` 仅在 `matched=true` 且 storedHash 为 legacy（`raw$` 或纯 hex）格式时返回，
+ * 用于调用方调用 setSetting 替换旧哈希；错误路径不显式置空但调用方仅在 matched=true 时读取该字段。
  */
 export async function verifyPassword(password: string, storedHash: string, legacySalt: string): Promise<{ matched: boolean; upgradedHash?: string }> {
     if (storedHash.startsWith('pbkdf2$')) {
@@ -91,12 +94,17 @@ export async function isAuthenticated(request: Request, db: D1Database): Promise
 
 /**
  * 从请求 Cookie 头解析指定 name 的值
+ * 支持 value 含 '=' 号（按第一个 '=' 切分 key/value）
  */
 export function getCookie(request: Request, name: string): string | null {
     const cookieHeader = request.headers.get('Cookie');
     if (cookieHeader) {
         for (const cookie of cookieHeader.split(';')) {
-            const [key, value] = cookie.trim().split('=');
+            const trimmed = cookie.trim();
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx === -1) continue;
+            const key = trimmed.slice(0, eqIdx);
+            const value = trimmed.slice(eqIdx + 1);
             if (key === name) return value;
         }
     }

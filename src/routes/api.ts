@@ -198,7 +198,12 @@ async function apiSetSettings(request: Request, db: D1Database): Promise<Respons
         return jsonResponse({ error: 'GitHub Token、Owner、Repo 必须同时提供。' }, 400);
     }
 
-    await Promise.all(Object.entries(settings).map(([key, value]) => setSetting(db, key, value)));
+    // FIX-18: 用 db.batch 替代 Promise.all(setSetting) —— 整体成功或整体回滚（事务语义）
+    await db.batch(
+        Object.entries(settings).map(([key, value]) =>
+            db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, String(value))
+        )
+    );
     return jsonResponse({ success: true, message: '设置已成功保存。' });
 }
 
