@@ -1,7 +1,7 @@
 // ip-sources.ts — IP 源抓取与同步逻辑
 // 从 index.legacy.js 提取（原 1158-1236、1598-1673 行 + sync 入口函数）
 
-import { getGitHubSettings, queryAll } from '../db/client.ts';
+import { getGitHubSettings, getSetting, queryAll } from '../db/client.ts';
 import { getCurrentGitHubContent, updateFileOnGitHub } from './github.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
@@ -53,7 +53,8 @@ type LogFn = (msg: string) => void;
 
 /** 定时任务：批量同步 IP 源（失败优先） */
 export async function syncScheduledIpSources(env: { WUYA: D1Database }): Promise<void> {
-    const BATCH_SIZE = 5;
+    // FIX-12: BATCH_SIZE 由 settings 配置（默认 10；非法值回退）
+    const BATCH_SIZE = Number(await getSetting(env.WUYA, 'BATCH_SIZE')) || 10;
     const db = env.WUYA;
     const log: LogFn = (msg) => console.log(beijingTimeLog(msg));
 

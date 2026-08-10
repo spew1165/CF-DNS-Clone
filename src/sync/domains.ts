@@ -45,7 +45,8 @@ export async function getDnsFromDoh(domain: string, type: string): Promise<strin
 
 /** 定时任务：批量同步启用域名（失败优先） */
 export async function syncScheduledDomains(env: { WUYA: D1Database }): Promise<void> {
-    const BATCH_SIZE = 5;
+    // FIX-12: BATCH_SIZE 由 settings 配置（默认 10；非法值回退）
+    const BATCH_SIZE = Number(await getSetting(db, 'BATCH_SIZE')) || 10;
     const db = env.WUYA;
     const log: LogFn = (msg) => console.log(beijingTimeLog(msg));
 
@@ -259,15 +260,24 @@ export async function resolveRecursively(domain: string, log: LogFn, depth = 0):
     return [...validIPv4s.map(ip => ({ type: 'A', content: ip })), ...validIPv6s.map(ip => ({ type: 'AAAA', content: ip }))];
 }
 
-/** 分块并发处理（每块 Promise.all） */
+/** 分块并发处理（每块 Promise.allSettled，收集错误后汇总） */
 export async function processInChunks<T, R>(items: T[], chunkSize: number, processFn: (item: T) => Promise<R>, log: LogFn): Promise<R[]> {
-    let allResponses: R[] = [];
+    const allResponses: R[] = [];
+    const errors: Error[] = [];
     for (let i = 0; i < items.length; i += chunkSize) {
         const chunk = items.slice(i, i + chunkSize);
         log(`正在处理一个包含 ${chunk.length} 个项目的批次...`);
-        const promises = chunk.map(processFn);
-        const responses = await Promise.all(promises);
-        allResponses = allResponses.concat(responses);
+        const settled = await Promise.allSettled(chunk.map(processFn));
+        for (const s of settled) {
+            if (s.status === 'fulfilled') {
+                allResponses.push(s.value);
+            } else {
+                errors.push(s.reason instanceof Error ? s.reason : new Error(String(s.reason)));
+            }
+        }
+    }
+    if (errors.length > 0) {
+        throw new Error(`批次处理中发生 ${errors.length} 个错误: ${errors.map(e => e.message).join('; ')}`);
     }
     return allResponses;
 }

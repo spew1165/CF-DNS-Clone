@@ -38,7 +38,7 @@ export async function handleGitHubFileProxy(fileName: string, env: { WUYA: D1Dat
         response = new Response(githubResponse.body, {
             headers: {
                 'Content-Type': 'text/plain; charset=utf-8',
-                'Cache-Control': 's-maxage=300'
+                'Cache-Control': 'public, max-age=60, s-maxage=300'
             }
         });
 
