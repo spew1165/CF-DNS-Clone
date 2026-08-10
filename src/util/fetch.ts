@@ -2,6 +2,8 @@
 // 隐含修正 B4 的载体：引入 AbortController 超时，杜绝外部抓取无界等待
 // 阶段 C 新建；阶段 D 起 sync 层全面使用
 
+import { HttpError } from './http-error.ts';
+
 /**
  * 带超时的 fetch（默认 10s）
  * @param url 请求地址
@@ -20,6 +22,10 @@ export async function fetchWithTimeout(url: string, init: RequestInit = {}, time
 
 /**
  * 带超时 + 指数退避重试的 fetch
+ *
+ * 非 2xx 抛 HttpError（携带 status），调用方可据此分支处理（如 404 走"资源不存在"路径）。
+ * 4xx 属于客户端错误，重试无意义，立即抛出；仅 408/429 与 5xx/网络错误才重试。
+ *
  * @param url 请求地址
  * @param init fetch init 选项
  * @param retries 最大重试次数（默认 2）
@@ -31,8 +37,14 @@ export async function fetchWithRetry(url: string, init: RequestInit = {}, retrie
         try {
             const response = await fetchWithTimeout(url, init, timeoutMs);
             if (response.ok) return response;
-            lastError = new Error(`HTTP ${response.status}: ${url}`);
+            const httpError = new HttpError(response.status, `HTTP ${response.status}: ${url}`);
+            // 4xx（除 408 超时 / 429 限流）重试不会改变结果，直接抛出
+            if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+                throw httpError;
+            }
+            lastError = httpError;
         } catch (e) {
+            if (e instanceof HttpError) throw e;
             lastError = e instanceof Error ? e : new Error(String(e));
         }
         if (attempt < retries) {

@@ -4,7 +4,7 @@
 import { fetchWithRetry } from '../util/fetch.ts';
 import { HttpError } from '../util/http-error.ts';
 
-/** GitHub API 请求统一封装 */
+/** GitHub API 请求统一封装（非 2xx 由 fetchWithRetry 抛出 HttpError） */
 async function githubApiRequest(url: string, token: string, options: RequestInit = {}): Promise<Response> {
     const headers = {
         'Authorization': `Bearer ${token}`,
@@ -12,12 +12,7 @@ async function githubApiRequest(url: string, token: string, options: RequestInit
         'Accept': 'application/vnd.github.v3+json',
         ...(options.headers as Record<string, string> | undefined),
     };
-    const response = await fetchWithRetry(url, { ...options, headers }, 1, 15000);
-    if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: response.statusText })) as { message?: string };
-        throw new HttpError(response.status, `GitHub API error (${response.status}): ${errorData.message ?? response.statusText}`);
-    }
-    return response;
+    return await fetchWithRetry(url, { ...options, headers }, 1, 15000);
 }
 
 /** 确保仓库存在，不存在则创建私有仓库 */
