@@ -46,9 +46,9 @@ export async function getDnsFromDoh(domain: string, type: string): Promise<strin
 
 /** 定时任务：批量同步启用域名（失败优先） */
 export async function syncScheduledDomains(env: { WUYA: D1Database }): Promise<void> {
+    const db = env.WUYA;
     // FIX-12: BATCH_SIZE 由 settings 配置（默认 10；非法值回退）
     const BATCH_SIZE = Number(await getSetting(db, 'BATCH_SIZE')) || 10;
-    const db = env.WUYA;
     const log: LogFn = (msg) => console.log(beijingTimeLog(msg));
 
     const { token, zoneId } = await getCfApiSettings(db);
