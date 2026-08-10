@@ -186,6 +186,10 @@ export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database,
                 delete syncContext.threeNetworkIps;
             }
         }
+        // FIX-15: 上游源返回 0 IP 时 syncContext.threeNetworkIps 已被 delete，
+        // 若直接 [type] 解引会抛 "Cannot read properties of undefined"。
+        // 返回空数组交给 syncDomainLogic 走 "无记录" 分支判定 no_change / 抛错。
+        if (!syncContext.threeNetworkIps) return [];
         const ips = (syncContext.threeNetworkIps as { [k: string]: string[] })[type] || [];
         return ips.map(ip => ({ type: 'A', content: ip }));
     }

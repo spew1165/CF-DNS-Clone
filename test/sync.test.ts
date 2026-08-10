@@ -171,11 +171,14 @@ describe("syncSingleIpSource (Task 2.1 is_enabled 守卫)", () => {
 describe("syncSystemDomains (FIX-02: 错误日志替代静默)", () => {
     it("syncDomainLogic 抛错时 D1 写入 failed 状态，且日志输出可定位失败域名", async () => {
         // 插入一个启用系统域名，source_domain 设为 internal:hostmonit:CM
+        // last_synced_records 设为非空：模拟"上次曾成功同步过"，这样上游失败返回 [] 时
+        // 走 syncDomainLogic 的 lastRecords.length > 0 分支 → 抛"上次曾有记录" → D1 写入 failed
+        // （FIX-15 后上游空 IP 不再崩溃，但与"上次成功"矛盾时仍应被标 failed）
         await env.WUYA.prepare(
-            "INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, is_system, is_enabled) VALUES (?, ?, ?, ?, 1, 1)"
-        ).bind("internal:hostmonit:CM", "sys-catch-test.example.com", "test-zone-id", 0).run();
+            "INSERT INTO domains (source_domain, target_domain, zone_id, is_deep_resolve, last_synced_records, is_system, is_enabled) VALUES (?, ?, ?, ?, ?, 1, 1)"
+        ).bind("internal:hostmonit:CM", "sys-catch-test.example.com", "test-zone-id", 0, JSON.stringify([{ type: "A", content: "1.2.3.4" }])).run();
 
-        // 让 fetch 抛错（无论谁尝试访问网络都会失败）—— 三网源获取失败 → 后续 ips 为 undefined → 同步逻辑抛错
+        // 让 fetch 抛错（无论谁尝试访问网络都会失败）—— 三网源获取失败 → resolveRecordsForDomain 返回 []
         vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network boom"); }));
 
         await syncSystemDomains(env, false);
@@ -306,5 +309,35 @@ describe("resolveRecordsForDomain (FIX-14)", () => {
         };
         const records = await resolveRecordsForDomain(domain, env.WUYA, () => {}, syncContext);
         expect(records).toEqual([{ type: "A", content: "1.1.1.1" }]);
+    });
+
+    it("internal:hostmonit:* 上游源返回 0 IP 时不崩溃，返回空数组（FIX-15）", async () => {
+        // hostmonit HTML 表格无 <tr> → 解析得到空三网集合 → 触发 delete cache 分支
+        vi.stubGlobal("fetch", vi.fn(async () => new Response("<html><body><table></table></body></html>", { status: 200 })));
+
+        const domain: {
+            source_domain: string;
+            target_domain: string;
+            zone_id: string;
+            is_deep_resolve: number;
+            ttl: number;
+            last_synced_records: string | null;
+            is_enabled: number;
+            is_system: number;
+            id: number;
+        } = {
+            id: 999,
+            source_domain: "internal:hostmonit:yd",
+            target_domain: "x.example.com",
+            zone_id: "test-zone",
+            is_deep_resolve: 0,
+            ttl: 60,
+            last_synced_records: "[]",
+            is_enabled: 1,
+            is_system: 1,
+        };
+
+        const records = await resolveRecordsForDomain(domain, env.WUYA, () => {}, {});
+        expect(records).toEqual([]);
     });
 });
