@@ -1,7 +1,7 @@
 // domains.ts — 域名克隆同步逻辑
 // 从 index.legacy.js 提取（原 syncScheduledDomains / syncDomainLogic / syncSingleDomain / syncAllDomains / syncSystemDomains / resolveRecursively / processInChunks / updateCloudflareDns / getDnsFromDoh）
 
-import { getSetting, getCfApiSettings } from '../db/client.ts';
+import { getSetting, getCfApiSettings, queryAll } from '../db/client.ts';
 import { fetchThreeNetworkIps } from './ip-sources.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
@@ -63,7 +63,7 @@ export async function syncScheduledDomains(env: { WUYA: D1Database }): Promise<v
             last_synced_time ASC
         LIMIT ?`;
 
-    const { results: domainsToSync } = await db.prepare(query).bind(BATCH_SIZE).all() as { results: DomainRow[] };
+    const domainsToSync = await queryAll<DomainRow>(db, query, BATCH_SIZE);
 
     if (domainsToSync.length === 0) {
         log("No domains to sync in this batch.");
@@ -110,7 +110,7 @@ export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: bool
         log("开始批量同步任务...");
         const { token, zoneId } = await getCfApiSettings(db);
         if (!token || !zoneId) throw new Error("尚未配置 Cloudflare API 令牌或区域 ID。");
-        const { results: domains } = await db.prepare("SELECT * FROM domains WHERE is_enabled = 1").all() as { results: DomainRow[] };
+        const domains = await queryAll<DomainRow>(db, "SELECT * FROM domains WHERE is_enabled = 1");
         if (domains.length === 0) {
             log("没有需要同步的已启用目标。");
             return;
@@ -140,7 +140,7 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
         log("开始同步系统预设域名...");
         const { token, zoneId } = await getCfApiSettings(db);
         if (!token || !zoneId) throw new Error("尚未配置 Cloudflare API 令牌或区域 ID。");
-        const { results: domains } = await db.prepare("SELECT * FROM domains WHERE is_enabled = 1 AND is_system = 1").all() as { results: DomainRow[] };
+        const domains = await queryAll<DomainRow>(db, "SELECT * FROM domains WHERE is_enabled = 1 AND is_system = 1");
         if (domains.length === 0) {
             log("没有需要同步的已启用系统域名。");
             return;

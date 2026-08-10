@@ -1,10 +1,10 @@
 // client.ts — D1 数据库统一访问层
 // 后续所有 sync 的唯一 DB 入口（阶段 D 起使用）；本阶段先承载 settings 读取
 
-/** 查询全部结果 */
-export async function queryAll(db: D1Database, sql: string, ...bind: unknown[]) {
-    const { results } = await db.prepare(sql).bind(...bind).all();
-    return results;
+/** 查询全部结果（泛型版） */
+export async function queryAll<T = unknown>(db: D1Database, sql: string, ...bind: unknown[]): Promise<T[]> {
+    const { results } = await db.prepare(sql).bind(...bind).all<T>();
+    return results as T[];
 }
 
 /** 查询首行 */
@@ -38,7 +38,7 @@ export async function setSetting(db: D1Database, key: string, value: string | nu
 
 /** 读取全部 settings 为对象 */
 export async function getFullSettings(db: D1Database) {
-    const { results } = await db.prepare("SELECT key, value FROM settings").all() as { results: { key: string; value: string }[] };
+    const results = await queryAll<{ key: string; value: string }>(db, "SELECT key, value FROM settings");
     const settings: Record<string, string> = {};
     for (const row of results) {
         settings[row.key] = row.value;

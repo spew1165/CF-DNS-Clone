@@ -1,7 +1,7 @@
 // ip-sources.ts — IP 源抓取与同步逻辑
 // 从 index.legacy.js 提取（原 1158-1236、1598-1673 行 + sync 入口函数）
 
-import { getGitHubSettings } from '../db/client.ts';
+import { getGitHubSettings, queryAll } from '../db/client.ts';
 import { getCurrentGitHubContent, updateFileOnGitHub } from './github.ts';
 import { beijingTimeLog } from '../util/log.ts';
 import { createLogStreamResponse } from '../util/sse.ts';
@@ -71,7 +71,7 @@ export async function syncScheduledIpSources(env: { WUYA: D1Database }): Promise
             last_synced_time ASC
         LIMIT ?`;
 
-    const { results: sourcesToSync } = await db.prepare(query).bind(BATCH_SIZE).all() as { results: { id: number }[] };
+    const sourcesToSync = await queryAll<{ id: number }>(db, query, BATCH_SIZE);
 
     if (sourcesToSync.length === 0) {
         log("No IP sources to sync in this batch.");
@@ -136,7 +136,7 @@ export async function syncAllIpSources(env: { WUYA: D1Database }, returnLogs: bo
     const db = env.WUYA;
     const syncLogic = async (log: LogFn) => {
         log("开始批量同步IP源...");
-        const { results: sources } = await db.prepare("SELECT * FROM ip_sources WHERE is_enabled = 1").all() as { results: IpSourceRow[] };
+        const sources = await queryAll<IpSourceRow>(db, "SELECT * FROM ip_sources WHERE is_enabled = 1");
         if (sources.length === 0) {
             log("没有已启用的IP源需要同步。");
             return;

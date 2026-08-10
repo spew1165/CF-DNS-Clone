@@ -3,7 +3,7 @@
 // 修订 R2：不引入 schema_version 表，旧幂等逻辑完整保留（已部署实例不受影响）
 // schema 演进留到阶段 F 测试体系就绪后
 
-import { getSetting, setSetting, getCfApiSettings } from './client.ts';
+import { getSetting, setSetting, getCfApiSettings, queryAll } from './client.ts';
 import { getZoneName } from '../util/cf.ts';
 
 /** 初始化/迁移数据库：幂等，可重复执行 */
@@ -75,9 +75,10 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
     await db.prepare("CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip, attempted_at)").run();
     await db.prepare("DELETE FROM login_attempts WHERE attempted_at < datetime('now', '-1 hour')").run();
 
-    const { results: invalidDomains } = await db
-        .prepare("SELECT id, target_domain FROM domains WHERE target_domain LIKE '%.'")
-        .all() as { results: { id: number; target_domain: string }[] };
+    const invalidDomains = await queryAll<{ id: number; target_domain: string }>(
+        db,
+        "SELECT id, target_domain FROM domains WHERE target_domain LIKE '%.'"
+    );
     if (invalidDomains.length > 0) {
         try {
             const zoneName = (await getZoneName(token, zoneId)).replace(/\.$/, '');
