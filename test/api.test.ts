@@ -282,6 +282,24 @@ describe("POST /api/settings (Task 2.6 白名单 + 配对验证)", () => {
         const legit = await env.WUYA.prepare("SELECT value FROM settings WHERE key = 'THREE_NETWORK_SOURCE'").first() as { value: string };
         expect(legit.value).toBe("wetest.vip");
     });
+
+    it("null 值正确清除字段（P1-4）", async () => {
+        const cookie = await loginAndGetCookie();
+        // 先写入一个值
+        await env.WUYA.prepare(
+            "INSERT INTO settings (key, value) VALUES ('THREE_NETWORK_SOURCE', 'wetest.vip') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+        ).run();
+        // 再用 null 覆盖
+        const res = await SELF.fetch("https://example.com/api/settings", {
+            method: "POST",
+            headers: { Cookie: cookie, "Content-Type": "application/json" },
+            body: JSON.stringify({ THREE_NETWORK_SOURCE: null }),
+        });
+        expect(res.status).toBe(200);
+        // 字段应被删除，不应序列化为字符串 "null"
+        const row = await env.WUYA.prepare("SELECT value FROM settings WHERE key = 'THREE_NETWORK_SOURCE'").first();
+        expect(row).toBeNull();
+    });
 });
 
 describe("GET /api/settings (Task 2.5 敏感字段过滤)", () => {

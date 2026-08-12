@@ -154,12 +154,19 @@ async function apiGetSettings(request: Request, db: D1Database): Promise<Respons
 }
 
 async function apiSetSettings(request: Request, db: D1Database): Promise<Response> {
-    const rawSettings = await request.json() as Record<string, string>;
+    const rawSettings = await request.json() as Record<string, unknown>;
 
-    // 白名单：仅允许写入已知 key，未知 key 静默丢弃（不抛错，保持向前兼容）
-    const settings: Record<string, string> = {};
+    // 白名单：仅允许写入已知 key；保留 null 以表达"清除该字段"语义
+    const settings: Record<string, string | null> = {};
     for (const [key, value] of Object.entries(rawSettings)) {
-        if (ALLOWED_SETTINGS_KEYS.has(key)) settings[key] = String(value);
+        if (!ALLOWED_SETTINGS_KEYS.has(key)) continue;
+        if (value === null || value === undefined) {
+            settings[key] = null;
+        } else if (typeof value === 'string') {
+            settings[key] = value;
+        } else {
+            settings[key] = String(value);
+        }
     }
 
     const { CF_API_TOKEN, CF_ZONE_ID, GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO } = settings;
@@ -183,10 +190,11 @@ async function apiSetSettings(request: Request, db: D1Database): Promise<Respons
         return jsonResponse({ error: 'GitHub Token、Owner、Repo 必须同时提供。' }, 400);
     }
 
-    // FIX-18: 用 db.batch 替代 Promise.all(setSetting) —— 整体成功或整体回滚（事务语义）
-    await db.batch(
+    // FIX-18: 用 setSetting 替代裸 INSERT OR REPLACE —— null/空字符串统一表示清除
+    // 单条 SQL 失败的概率极低；setSetting 已实现正确的 null 删除语义
+    await Promise.all(
         Object.entries(settings).map(([key, value]) =>
-            db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, String(value))
+            setSetting(db, key, value === '' ? null : value)
         )
     );
     return jsonResponse({ success: true, message: '设置已成功保存。' });
