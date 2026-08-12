@@ -1,6 +1,14 @@
 // templates.js — UI 模板函数（阶段 E 从 index.legacy.js 拆出）
 // 纯 JS 文件（tsc 不参与）：内含大量浏览器端 JS 模板字符串
 
+// HTML 实体转义：所有插值到模板字符串的用户控制字段必须经过 escapeHtml
+// 防止存储型 XSS（攻击者写入恶意 notes/target_domain 等字段即可在所有访客浏览器执行）
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[c]));
+}
+
 export function getHtmlLayout(title, content) { return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"><style>
 :root {
     --sidebar-width: 250px;
@@ -251,14 +259,14 @@ export function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSo
             }
         }
         return `
-        <div class="public-card" data-copy-content="${d.target_domain}">
+        <div class="public-card" data-copy-content="${escapeHtml(d.target_domain)}">
             <div class="public-card-header">
-                <h3 class="public-card-title">${d.notes || '未知线路'}</h3>
-                <span class="public-card-meta">${formatTime(d.last_synced_time)}</span>
+                <h3 class="public-card-title">${escapeHtml(d.notes || '未知线路')}</h3>
+                <span class="public-card-meta">${escapeHtml(formatTime(d.last_synced_time))}</span>
             </div>
-            <div class="public-card-content">${d.target_domain}</div>
+            <div class="public-card-content">${escapeHtml(d.target_domain)}</div>
             <div class="public-card-footer">
-                <i class="fa-solid fa-link fa-xs"></i> <span>来源: ${sourceHost}</span>
+                <i class="fa-solid fa-link fa-xs"></i> <span>来源: ${escapeHtml(sourceHost)}</span>
             </div>
         </div>`;
     }).join('');
@@ -266,14 +274,14 @@ export function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSo
     const ipSourceCards = ipSources.map(s => {
         const fullUrl = `${origin}/${s.github_path}`;
         return `
-        <div class="public-card" data-copy-content="${fullUrl}">
+        <div class="public-card" data-copy-content="${escapeHtml(fullUrl)}">
             <div class="public-card-header">
-                <h3 class="public-card-title">${s.github_path}</h3>
-                <span class="public-card-meta">${formatTime(s.last_synced_time)}</span>
+                <h3 class="public-card-title">${escapeHtml(s.github_path)}</h3>
+                <span class="public-card-meta">${escapeHtml(formatTime(s.last_synced_time))}</span>
             </div>
-            <div class="public-card-content">${fullUrl}</div>
+            <div class="public-card-content">${escapeHtml(fullUrl)}</div>
             <div class="public-card-footer">
-                <i class="fa-solid fa-link fa-xs"></i> <span>来源: ${new URL(s.url).hostname}</span>
+                <i class="fa-solid fa-link fa-xs"></i> <span>来源: ${escapeHtml(new URL(s.url).hostname)}</span>
             </div>
         </div>`;
     }).join('');
