@@ -73,6 +73,31 @@ describe("handleUiRequest /admin 鉴权", () => {
         expect(warnSpy).toHaveBeenCalled();
         warnSpy.mockRestore();
     });
+
+    it("仪表盘 HTML 不应泄露 CF_API_TOKEN / GITHUB_TOKEN / PASSWORD_SALT / 密码哈希 (P0-3)", async () => {
+        const tokenLeak = "CF_API_TOKEN_LITERAL_LEAK_123";
+        const githubLeak = "GH_TOKEN_LITERAL_LEAK_456";
+        const saltLeak = "SALT_LITERAL_LEAK_789";
+        const hashLeak = "pbkdf2$999999$" + saltLeak + "$deadbeefcafebabe";
+        await env.WUYA.batch([
+            env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('CF_API_TOKEN', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(tokenLeak),
+            env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('GITHUB_TOKEN', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(githubLeak),
+            env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('PASSWORD_SALT', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(saltLeak),
+            env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('ADMIN_PASSWORD_HASH', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(hashLeak),
+            env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('CF_ZONE_ID', 'zone') ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
+        ]);
+
+        const req = await loggedInRequest("https://example.com/admin");
+        const res = await handleUiRequest(req, env);
+
+        expect(res.status).toBe(200);
+        const html = await res.text();
+        expect(html).not.toContain(tokenLeak);
+        expect(html).not.toContain(githubLeak);
+        expect(html).not.toContain(saltLeak);
+        expect(html).not.toContain(hashLeak);
+        expect(html).not.toContain("pbkdf2$");
+    });
 });
 
 describe("handleUiRequest 公开首页", () => {

@@ -1,7 +1,7 @@
 // api.ts — API 路由层（handleApiRequest + 所有 /api/* 处理函数）
 // 从 index.legacy.js 提取（原 104-302、227-302、1085-1148 行区域）
 
-import { getSetting, setSetting, getFullSettings, getCfApiSettings } from '../db/client.ts';
+import { getSetting, setSetting, getFullSettings, getCfApiSettings, getSafeSettings } from '../db/client.ts';
 import { ensureInitialData } from '../db/migrations.ts';
 import { jsonResponse } from '../util/http.ts';
 import { hashPassword, isAuthenticated, verifyPassword } from '../util/auth.ts';
@@ -10,21 +10,6 @@ import { FETCH_STRATEGIES } from '../sync/ip-sources.ts';
 import { syncAllDomains, syncSystemDomains, syncSingleDomain } from '../sync/domains.ts';
 import { syncSingleIpSource, syncAllIpSources } from '../sync/ip-sources.ts';
 import { assertSafeHttpUrl } from '../util/url-safety.ts';
-
-/** 敏感字段：序列化到前端前过滤 */
-const SENSITIVE_SETTINGS_KEYS = new Set([
-    'ADMIN_PASSWORD_HASH',
-    'PASSWORD_SALT',
-    'CF_API_TOKEN',
-    'GITHUB_TOKEN',
-]);
-
-/** 读取安全的 settings（前端可见） */
-export async function getSafeSettings(db: D1Database): Promise<Record<string, string>> {
-    const all = await getFullSettings(db);
-    for (const key of SENSITIVE_SETTINGS_KEYS) delete all[key];
-    return all;
-}
 
 /** 允许写入的 settings 白名单 */
 const ALLOWED_SETTINGS_KEYS = new Set([

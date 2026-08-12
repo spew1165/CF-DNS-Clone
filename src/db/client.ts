@@ -46,6 +46,21 @@ export async function getFullSettings(db: D1Database) {
     return settings;
 }
 
+/** 敏感字段：序列化到前端前过滤（Token、密码哈希等） */
+export const SENSITIVE_SETTINGS_KEYS = new Set([
+    'ADMIN_PASSWORD_HASH',
+    'PASSWORD_SALT',
+    'CF_API_TOKEN',
+    'GITHUB_TOKEN',
+]);
+
+/** 读取安全的 settings（前端可见，已剔除敏感字段） */
+export async function getSafeSettings(db: D1Database): Promise<Record<string, string>> {
+    const all = await getFullSettings(db);
+    for (const key of SENSITIVE_SETTINGS_KEYS) delete all[key];
+    return all;
+}
+
 /** 读取 Cloudflare API 设置（token + zoneId） */
 export async function getCfApiSettings(db: D1Database) {
     const [token, zoneId] = await Promise.all([

@@ -2,7 +2,7 @@
 // 从 index.legacy.js 提取（原 handleUiRequest）
 // 注：UI 模板函数（getHtmlLayout / getSetupPage / getPublicHomepage / getDashboardPage / getDashboardScript）仍在 legacy，阶段 E 拆分
 
-import { getSetting, getFullSettings, getCfApiSettings } from '../db/client.ts';
+import { getSetting, getSafeSettings, getCfApiSettings } from '../db/client.ts';
 import { ensureInitialData } from '../db/migrations.ts';
 import { isAuthenticated } from '../util/auth.ts';
 import { getZoneName } from '../util/cf.ts';
@@ -24,7 +24,7 @@ export async function handleUiRequest(request: Request, env: { WUYA: D1Database 
       pageContent = getSetupPage();
   } else if (path === '/admin' && loggedIn) {
       pageTitle = 'DNS Clone Dashboard';
-      const settings = await getFullSettings(db);
+      const settings = await getSafeSettings(db);
 
       const { token, zoneId } = await getCfApiSettings(db);
       if (token && zoneId) {
