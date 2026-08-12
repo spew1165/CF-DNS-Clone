@@ -1,6 +1,18 @@
 // auth.ts — 认证与密码哈希工具
 // 从 index.legacy.js 提取（原 1844-1846 行）
 
+import { getCookie } from './http.ts';
+
+/** 恒定时间十六进制字符串比对（先比较长度，再对每字符做 XOR 累积差异） */
+function timingSafeHexEqual(a: string, b: string): boolean {
+    if (a.length !== b.length) return false;
+    let diff = 0;
+    for (let i = 0; i < a.length; i++) {
+        diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+    }
+    return diff === 0;
+}
+
 /**
  * 哈希密码（PBKDF2，100k 迭代）
  * 隐含修正 B3：原单轮 SHA-256 升级为 PBKDF2，防彩虹表/字典攻击
@@ -55,11 +67,11 @@ export async function verifyPassword(password: string, storedHash: string, legac
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
         const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: encoder.encode(salt), iterations, hash: 'SHA-256' }, keyMaterial, 256);
         const candidate = Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
-        return { matched: candidate === hex };
+        return { matched: timingSafeHexEqual(candidate, hex) };
     }
     if (storedHash.startsWith('raw$')) {
         const candidate = await legacyHashPassword(password, legacySalt);
-        if (candidate === storedHash) {
+        if (timingSafeHexEqual(candidate, storedHash)) {
             const newSalt = crypto.randomUUID();
             const upgraded = await hashPassword(password, newSalt);
             return { matched: true, upgradedHash: upgraded };
@@ -70,7 +82,7 @@ export async function verifyPassword(password: string, storedHash: string, legac
     const encoder = new TextEncoder();
     const buf = await crypto.subtle.digest('SHA-256', encoder.encode(password + legacySalt));
     const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-    if (hex === storedHash) {
+    if (timingSafeHexEqual(hex, storedHash)) {
         const newSalt = crypto.randomUUID();
         const upgraded = await hashPassword(password, newSalt);
         return { matched: true, upgradedHash: upgraded };
@@ -92,21 +104,5 @@ export async function isAuthenticated(request: Request, db: D1Database): Promise
     return true;
 }
 
-/**
- * 从请求 Cookie 头解析指定 name 的值
- * 支持 value 含 '=' 号（按第一个 '=' 切分 key/value）
- */
-export function getCookie(request: Request, name: string): string | null {
-    const cookieHeader = request.headers.get('Cookie');
-    if (cookieHeader) {
-        for (const cookie of cookieHeader.split(';')) {
-            const trimmed = cookie.trim();
-            const eqIdx = trimmed.indexOf('=');
-            if (eqIdx === -1) continue;
-            const key = trimmed.slice(0, eqIdx);
-            const value = trimmed.slice(eqIdx + 1);
-            if (key === name) return value;
-        }
-    }
-    return null;
-}
+/** 从请求 Cookie 头解析指定 name 的值；re-export 自 util/http，保持单一来源 */
+export { getCookie } from './http.ts';
