@@ -16,5 +16,5 @@
         "types": []
     },
     "include": ["src/**/*.ts", "src/**/*.js", "worker-configuration.d.ts"],
-    "exclude": ["node_modules", ".wrangler", "dist", "coverage", "src/ui/templates/**"]
+    "exclude": ["node_modules", ".wrangler", "dist", "coverage", "src/ui/templates.js"]
 }
