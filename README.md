@@ -281,7 +281,7 @@ pnpm dev
 | `pnpm test:coverage` | 运行测试并生成覆盖率报告（istanbul 插桩）                    |
 | `pnpm typecheck`     | TypeScript 严格模式检查（`tsc --noEmit`）                    |
 | `pnpm build:single`  | 用 esbuild 打包 `src/index.ts` → `dist/worker.bundle.js`    |
-| `pnpm predeploy`     | 部署前校验：检查 `wrangler.jsonc` 中 `database_id` 是否替换   |
+| `pnpm predeploy`     | 部署前校验：检查 `wrangler.toml` 中 `database_id` 是否替换   |
 | `pnpm deploy`        | CLI 部署到 Cloudflare（自动注入 `.env` 中的 `CLOUDFLARE_API_TOKEN`） |
 | `pnpm cf-typegen`    | 重新生成 `worker-configuration.d.ts`（gitignore）            |
 
@@ -293,7 +293,7 @@ pnpm dev
 # 1. 创建生产 D1 数据库（记下输出的 database_id）
 pnpm dlx wrangler d1 create wuya-db
 
-# 2. 将返回的 UUID 填入 wrangler.jsonc 的 database_id
+# 2. 将返回的 UUID 填入 wrangler.toml 的 database_id
 #    （替换占位符 REPLACE_WITH_YOUR_D1_ID）
 
 # 3. 在项目根目录创建 .env，写入账号级 Token（用于 wrangler CLI 认证）
@@ -307,7 +307,7 @@ pnpm predeploy
 pnpm deploy
 ```
 
-> **注意**：`wrangler.jsonc` 已配置 `keep_vars: true`，不会覆盖你在 Dashboard 里手动配置的 Variables / Bindings。CLI 部署与网页部署两条路径可混用。
+> **注意**：`wrangler.toml` 已配置 `keep_vars: true`，不会覆盖你在 Dashboard 里手动配置的 Variables / Bindings。CLI 部署与网页部署两条路径可混用。
 
 ### 仓库结构
 
@@ -316,7 +316,7 @@ pnpm deploy
 ├── README.md            # 本文档
 ├── CLAUDE.md            # 给 AI 助手的代码事实摘要
 ├── package.json         # 脚本：dev / test / typecheck / deploy / cf-typegen
-├── wrangler.jsonc       # Worker 配置（compatibility_date 2026-01-15，keep_vars）
+├── wrangler.toml       # Worker 配置（compatibility_date 2026-01-15，keep_vars）
 ├── tsconfig.json        # TypeScript strict 配置
 ├── vitest.config.ts     # vitest-pool-workers 测试配置
 ├── scripts/
@@ -542,7 +542,7 @@ DELETE FROM settings WHERE key = 'PASSWORD_SALT';
 <details>
 <summary><strong>Q9：可以同时用网页部署和 CLI 部署吗？</strong></summary>
 
-可以。`wrangler.jsonc` 已配置 `keep_vars: true`，CLI 部署不会覆盖你在 Dashboard 手动配置的 Variables / Bindings。但 D1 数据库需要先在 Dashboard 创建好并把 `database_id` 填入 `wrangler.jsonc`。
+可以。`wrangler.toml` 已配置 `keep_vars: true`，CLI 部署不会覆盖你在 Dashboard 手动配置的 Variables / Bindings。但 D1 数据库需要先在 Dashboard 创建好并把 `database_id` 填入 `wrangler.toml`。
 </details>
 
 ---
@@ -577,7 +577,7 @@ DELETE FROM login_attempts WHERE ip = '你的IP';
 
 ### CLI 部署报错 `database_id 仍为占位符`
 
-`wrangler.jsonc` 中 `database_id` 没替换。先运行 `pnpm dlx wrangler d1 create wuya-db` 拿到真实 UUID，填入后重新 `pnpm deploy`。
+`wrangler.toml` 中 `database_id` 没替换。先运行 `pnpm dlx wrangler d1 create wuya-db` 拿到真实 UUID，填入后重新 `pnpm deploy`。
 
 ### Cron 设了不工作
 
