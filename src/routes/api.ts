@@ -326,7 +326,7 @@ async function apiDeleteIpSource(db: D1Database, id: number): Promise<Response> 
 
 async function apiProbeIpSource(request: Request): Promise<Response> {
     const { url } = await request.json() as { url?: string };
-    if (!url) return jsonResponse({ error: 'URL is required for probing.' }, 400);
+    if (!url) return jsonResponse({ error: '缺少用于探测的 URL 参数。' }, 400);
     try {
         assertSafeHttpUrl(url);
     } catch (e) {
