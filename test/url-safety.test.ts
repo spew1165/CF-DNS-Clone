@@ -1,6 +1,32 @@
 // url-safety.test.ts — FIX-04：assertSafeHttpUrl 覆盖各协议/内网/边界
 import { describe, it, expect } from "vitest";
-import { assertSafeHttpUrl } from "../src/util/url-safety.ts";
+import { assertSafeHttpUrl, parseHostToIpv4 } from "../src/util/url-safety.ts";
+
+describe("parseHostToIpv4", () => {
+    it("把十进制 IPv4 还原为点分十进制", () => {
+        expect(parseHostToIpv4("2130706433")).toBe("127.0.0.1");
+        expect(parseHostToIpv4("2852039166")).toBe("169.254.169.254");
+    });
+
+    it("把十六进制 IPv4 还原为点分十进制", () => {
+        expect(parseHostToIpv4("0x7f000001")).toBe("127.0.0.1");
+        expect(parseHostToIpv4("0xA9FEA9FE")).toBe("169.254.169.254");
+    });
+
+    it("从 IPv4-mapped IPv6 中抽取 IPv4", () => {
+        expect(parseHostToIpv4("::ffff:127.0.0.1")).toBe("127.0.0.1");
+        expect(parseHostToIpv4("::ffff:169.254.169.254")).toBe("169.254.169.254");
+    });
+
+    it("保持已是 IPv4 字符串的主机名不变", () => {
+        expect(parseHostToIpv4("8.8.8.8")).toBe("8.8.8.8");
+    });
+
+    it("对域名或合法 IPv6 返回 null", () => {
+        expect(parseHostToIpv4("example.com")).toBeNull();
+        expect(parseHostToIpv4("2001:db8::1")).toBeNull();
+    });
+});
 
 describe("assertSafeHttpUrl (FIX-04)", () => {
     it("接受公网 https URL", () => {
@@ -87,5 +113,30 @@ describe("assertSafeHttpUrl (FIX-04)", () => {
 
     it("公网域名混合大小写通过", () => {
         expect(() => assertSafeHttpUrl("HTTPS://Example.COM/abc")).not.toThrow();
+    });
+
+    it("拒绝十进制 IPv4 形式的回环（2130706433 = 127.0.0.1）", () => {
+        expect(() => assertSafeHttpUrl("http://2130706433/")).toThrow(/内网|元数据/);
+    });
+
+    it("拒绝十进制 IPv4 形式的 AWS 元数据（2852039166 = 169.254.169.254）", () => {
+        expect(() => assertSafeHttpUrl("http://2852039166/latest/meta-data/")).toThrow(/内网|元数据/);
+    });
+
+    it("拒绝十六进制 IPv4 形式的回环（0x7f000001 = 127.0.0.1）", () => {
+        expect(() => assertSafeHttpUrl("http://0x7f000001/")).toThrow(/内网|元数据/);
+    });
+
+    it("拒绝 IPv4-mapped IPv6 回环（[::ffff:127.0.0.1]）", () => {
+        expect(() => assertSafeHttpUrl("http://[::ffff:127.0.0.1]/")).toThrow(/内网|元数据/);
+    });
+
+    it("拒绝 IPv4-mapped IPv6 元数据（[::ffff:169.254.169.254]）", () => {
+        expect(() => assertSafeHttpUrl("http://[::ffff:169.254.169.254]/")).toThrow(/内网|元数据/);
+    });
+
+    it("公网十进制 IPv4 仍正常通过（防止过度拒绝）", () => {
+        // 134744072 = 8.8.8.8，公开 DNS 服务
+        expect(() => assertSafeHttpUrl("http://134744072/")).not.toThrow();
     });
 });
