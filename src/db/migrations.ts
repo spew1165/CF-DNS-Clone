@@ -91,7 +91,7 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
             const zoneName = (await getZoneName(token, zoneId)).replace(/\.$/, '');
             const fixStmts = [];
             for (const domain of invalidDomains) {
-                const prefix = domain.target_domain.replace(/\.$/, '');
+                const prefix = domain.target_domain.replace(/\.+$/, '');
                 const correctedDomain = (prefix === '' || prefix === '@') ? zoneName : `${prefix}.${zoneName}`;
                 fixStmts.push(db.prepare("UPDATE domains SET target_domain = ? WHERE id = ?").bind(correctedDomain, domain.id));
             }
