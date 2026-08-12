@@ -85,7 +85,7 @@ export async function updateFileOnGitHub({ token, owner, repo, path, content, me
 
     const body = JSON.stringify({
         message,
-        content: btoa(unescape(encodeURIComponent(content))),
+        content: btoa(String.fromCharCode(...new TextEncoder().encode(content))),
         sha
     });
 
