@@ -9,9 +9,16 @@ import { getZoneName } from '../util/cf.ts';
 /** 初始化/迁移数据库：幂等，可重复执行 */
 export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): Promise<void> {
     if (!env.WUYA) {
-        throw new Error("D1 database binding 'WUYA' not found. Please configure it in your Worker settings.");
+        throw new Error("未检测到 D1 数据库绑定 'WUYA'，请在 Worker 设置中配置。");
     }
     const db = env.WUYA;
+
+    // P1-8 门控：上次迁移在 24h 内则跳过，避免每请求执行整套 DDL
+    const lastMigratedAt = await getSetting(db, 'last_migrated_at');
+    const isFresh = !lastMigratedAt;
+    const isStale = isFresh || (Date.now() - new Date(lastMigratedAt).getTime()) > 24 * 60 * 60 * 1000;
+    if (!isStale) return;
+
     const expectedSchemas: Record<string, string[]> = {
         settings: ['key TEXT PRIMARY KEY NOT NULL', 'value TEXT NOT NULL'],
         domains: [
@@ -93,6 +100,9 @@ export async function initializeAndMigrateDatabase(env: { WUYA: D1Database }): P
             console.error("Failed to fix invalid domain entries:", e instanceof Error ? e.message : e);
         }
     }
+
+    // 记录本次迁移时间，供下次门控使用
+    await setSetting(db, 'last_migrated_at', new Date().toISOString());
 }
 
 /** 初始化默认数据（IP 源 + 系统域名），在配置 CF 凭据后调用 */
