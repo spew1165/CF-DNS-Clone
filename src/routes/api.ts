@@ -96,7 +96,7 @@ async function apiSetup(request: Request, db: D1Database): Promise<Response> {
   const passwordSet = await getSetting(db, 'ADMIN_PASSWORD_HASH');
   if (passwordSet) return jsonResponse({ error: '应用已经初始化。' }, 403);
   const { password } = await request.json() as { password?: string };
-  if (!password || password.length < 8) return jsonResponse({ error: '密码长度必须至少为8个字符。' }, 400);
+  if (!password || password.length < 8 || password.length > 1024) return jsonResponse({ error: '密码长度必须为 8 到 1024 个字符之间。' }, 400);
   const salt = crypto.randomUUID();
   const hash = await hashPassword(password, salt);
   await db.batch([
