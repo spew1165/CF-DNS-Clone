@@ -86,6 +86,8 @@ describe("handleUiRequest /admin 鉴权", () => {
             env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('ADMIN_PASSWORD_HASH', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(hashLeak),
             env.WUYA.prepare("INSERT INTO settings (key, value) VALUES ('CF_ZONE_ID', 'zone') ON CONFLICT(key) DO UPDATE SET value = excluded.value"),
         ]);
+        // getZoneName 会触发外部 fetch，stub 掉避免超时
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ success: true, result: { name: "example.com" } }), { status: 200 })));
 
         const req = await loggedInRequest("https://example.com/admin");
         const res = await handleUiRequest(req, env);

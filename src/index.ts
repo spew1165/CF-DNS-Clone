@@ -13,7 +13,7 @@ export default {
       try {
         await initializeAndMigrateDatabase(env);
       } catch (e) {
-        console.error("Database initialization failed:", e instanceof Error ? e.stack : e);
+        console.error("数据库初始化失败：", e instanceof Error ? e.stack : e);
         return new Response("严重错误：数据库初始化失败，请检查Worker的D1数据库绑定是否正确配置为'WUYA'。", { status: 500 });
       }
 
@@ -29,7 +29,7 @@ export default {
           }
           return await handleUiRequest(request, env);
       } catch (e) {
-          console.error("Global Catch:", e instanceof Error ? e.stack : e);
+          console.error("全局兜底：", e instanceof Error ? e.stack : e);
           const status = (e as { status?: number }).status || 500;
           if (path.startsWith('/api/')) {
               // API 路径：返回结构化错误（details 仅含 message，不含 stack）
@@ -41,11 +41,11 @@ export default {
       }
   },
   async scheduled(controller: ScheduledController, env: { WUYA: D1Database }, ctx: ExecutionContext): Promise<void> {
-      console.log("Scheduled task started: Initializing...");
+      console.log("定时任务开始：正在初始化...");
       try {
           await initializeAndMigrateDatabase(env);
       } catch (e) {
-          console.error("Database initialization failed in scheduled handler:", e instanceof Error ? e.stack : e);
+          console.error("定时任务中数据库初始化失败：", e instanceof Error ? e.stack : e);
           return;
       }
 
@@ -57,21 +57,21 @@ export default {
       try {
           await setSetting(db, 'next_sync_task', otherTask);
       } catch (e) {
-          console.error("Failed to rotate next_sync_task:", e instanceof Error ? e.stack : e);
+          console.error("轮转 next_sync_task 失败：", e instanceof Error ? e.stack : e);
       }
 
       try {
           if (nextTask === 'domains') {
-              console.log("Scheduled task: Syncing a batch of DNS records (failure-first)...");
+              console.log("定时任务：正在同步一批 DNS 记录（失败优先）...");
               await syncScheduledDomains(env);
           } else {
-              console.log("Scheduled task: Syncing a batch of IP sources to GitHub (failure-first)...");
+              console.log("定时任务：正在把一批 IP 源同步到 GitHub（失败优先）...");
               await syncScheduledIpSources(env);
           }
       } catch (e) {
-          console.error(`Scheduled task '${nextTask}' failed:`, e instanceof Error ? e.stack : e);
+          console.error(`定时任务 '${nextTask}' 失败：`, e instanceof Error ? e.stack : e);
       }
 
-      console.log("Scheduled task for this cycle finished.");
+      console.log("本轮定时任务执行完毕。");
   },
 };

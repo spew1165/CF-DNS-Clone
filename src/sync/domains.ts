@@ -45,13 +45,13 @@ export async function getDnsFromDoh(domain: string, type: string): Promise<strin
         const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=${type}`;
         const response = await fetchWithTimeout(url, { headers: { 'accept': 'application/dns-json' } }, 8000);
         if (!response.ok) {
-            console.warn(`DoH query failed for ${domain} (${type}): ${response.statusText}`);
+            console.warn(`DoH 查询失败 ${domain} (${type}): ${response.statusText}`);
             return [];
         }
         const data = await response.json() as { Answer?: { data: string }[] };
         return data.Answer ? data.Answer.map(ans => ans.data).filter(Boolean) : [];
     } catch (e) {
-        console.error(`DoH query error for ${domain} (${type}): ${e instanceof Error ? e.message : String(e)}`);
+        console.error(`DoH 查询出错 ${domain} (${type}): ${e instanceof Error ? e.message : String(e)}`);
         return [];
     }
 }
