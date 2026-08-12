@@ -18,14 +18,14 @@ function dataLines(text: string): string[] {
 }
 
 describe("createLogStreamResponse", () => {
-    it("返回 SSE 标准响应头", () => {
+    it("returns SSE standard response headers", () => {
         const res = createLogStreamResponse(async () => {});
         expect(res.headers.get("Content-Type")).toBe("text/event-stream");
         expect(res.headers.get("Cache-Control")).toBe("no-cache");
         expect(res.headers.get("Connection")).toBe("keep-alive");
     });
 
-    it("logFunction 的每条日志都以 data: 帧推送", async () => {
+    it("each logFunction entry is pushed as a data: frame", async () => {
         const res = createLogStreamResponse(async (log) => {
             log("第一步");
             log("第二步");
@@ -38,7 +38,7 @@ describe("createLogStreamResponse", () => {
         expect(lines[1]).toContain("第二步");
     });
 
-    it("logFunction 抛错时推送 [FATAL_ERROR] 帧并正常关闭流", async () => {
+    it("logFunction throw pushes [FATAL_ERROR] frame and closes stream cleanly", async () => {
         const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const res = createLogStreamResponse(async (log) => {
@@ -54,7 +54,7 @@ describe("createLogStreamResponse", () => {
         expect(warnSpy).toHaveBeenCalled();
     });
 
-    it("非 Error 抛出物（如字符串）也能被安全序列化", async () => {
+    it("non-Error throws (e.g. string) are safely serialized", async () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
 
         const res = createLogStreamResponse(async () => {
@@ -66,7 +66,7 @@ describe("createLogStreamResponse", () => {
         expect(lines[0]).toContain("字符串异常");
     });
 
-    it("客户端 abort 后停止推送，且不因双重 close 抛错（FIX-09）", async () => {
+    it("after client abort stops pushing; no double-close error (FIX-09)", async () => {
         const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
         const controller = new AbortController();
 
@@ -93,7 +93,7 @@ describe("createLogStreamResponse", () => {
         expect(closeErrors).toHaveLength(0);
     });
 
-    it("已 abort 的 signal 传入时不推送任何日志", async () => {
+    it("already-aborted signal pushes no logs", async () => {
         vi.spyOn(console, "error").mockImplementation(() => {});
         const controller = new AbortController();
         controller.abort();

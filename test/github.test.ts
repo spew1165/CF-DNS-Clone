@@ -18,7 +18,7 @@ const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
 describe("ensureRepoExists", () => {
-    it("仓库已存在时不发起创建请求", async () => {
+    it("repo already exists: skip creation request", async () => {
         const spy = mockFetch(() => json({ name: "test-repo" }));
         const logs: string[] = [];
 
@@ -29,7 +29,7 @@ describe("ensureRepoExists", () => {
         expect(logs.some((l) => l.includes("已存在"))).toBe(true);
     });
 
-    it("仓库 404 时自动创建私有仓库", async () => {
+    it("repo 404: auto-create private repo", async () => {
         const spy = mockFetch((url) => {
             if (url === "https://api.github.com/repos/owner/new-repo") return json({ message: "Not Found" }, 404);
             if (url === "https://api.github.com/user/repos") return json({ name: "new-repo" }, 201);
@@ -47,7 +47,7 @@ describe("ensureRepoExists", () => {
         expect(logs.some((l) => l.includes("成功创建私有仓库"))).toBe(true);
     });
 
-    it("非 404 错误（如 401）直接抛出，不尝试创建", async () => {
+    it("non-404 error (e.g. 401) rethrows without attempting create", async () => {
         const spy = mockFetch(() => json({ message: "Bad credentials" }, 401));
 
         await expect(ensureRepoExists("bad-token", "owner", "repo", () => {})).rejects.toThrow(/401/);
@@ -57,7 +57,7 @@ describe("ensureRepoExists", () => {
 });
 
 describe("getCurrentGitHubContent", () => {
-    it("文件存在时返回原始文本内容", async () => {
+    it("file exists: returns raw text content", async () => {
         mockFetch(() => new Response("1.1.1.1\n2.2.2.2", { status: 200 }));
 
         const content = await getCurrentGitHubContent({
@@ -67,7 +67,7 @@ describe("getCurrentGitHubContent", () => {
         expect(content).toBe("1.1.1.1\n2.2.2.2");
     });
 
-    it("文件 404 时返回 null 并记录日志（走新建路径）", async () => {
+    it("file 404: returns null and logs (proceeds to create)", async () => {
         mockFetch(() => json({ message: "Not Found" }, 404));
         const logs: string[] = [];
 
@@ -79,7 +79,7 @@ describe("getCurrentGitHubContent", () => {
         expect(logs.some((l) => l.includes("不存在") && l.includes("missing.txt"))).toBe(true);
     });
 
-    it("403 等非 404 错误向上抛出", async () => {
+    it("non-404 errors like 403 rethrow", async () => {
         mockFetch(() => json({ message: "Forbidden" }, 403));
 
         await expect(getCurrentGitHubContent({
@@ -89,7 +89,7 @@ describe("getCurrentGitHubContent", () => {
 });
 
 describe("updateFileOnGitHub", () => {
-    it("已有文件时携带 sha 提交更新", async () => {
+    it("existing file: commits update with sha", async () => {
         const spy = mockFetch((url, init) => {
             if (url === "https://api.github.com/repos/owner/repo") return json({ name: "repo" });
             if (init?.method === "PUT") return json({ commit: { sha: "new-sha" } });
@@ -108,7 +108,7 @@ describe("updateFileOnGitHub", () => {
         expect(body.message).toBe("update ips");
     });
 
-    it("新文件（取 sha 得 404）时省略 sha 字段完成创建", async () => {
+    it("new file (sha lookup 404): creates without sha field", async () => {
         const spy = mockFetch((url, init) => {
             if (url === "https://api.github.com/repos/owner/repo") return json({ name: "repo" });
             if (init?.method === "PUT") return json({ commit: { sha: "new-sha" } }, 201);
@@ -127,7 +127,7 @@ describe("updateFileOnGitHub", () => {
         expect(JSON.parse(putCall![1]!.body as string).sha).toBeUndefined();
     });
 
-    it("内容按 base64 编码，UTF-8 中文可正确还原", async () => {
+    it("content is base64 encoded; UTF-8 Chinese round-trips correctly", async () => {
         const spy = mockFetch((url, init) => {
             if (url === "https://api.github.com/repos/owner/repo") return json({ name: "repo" });
             if (init?.method === "PUT") return json({});

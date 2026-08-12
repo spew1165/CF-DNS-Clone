@@ -8,8 +8,8 @@ afterEach(() => {
     vi.unstubAllGlobals();
 });
 
-describe("global catch — FIX-01 防御性回归", () => {
-    it("非 API 路径响应不应包含 V8 stack frame 格式", async () => {
+describe("global catch — FIX-01 defensive regression", () => {
+    it("non-API response should not contain V8 stack frame format", async () => {
         // 任意不存在白名单的路径，验证响应无 stack
         const res = await SELF.fetch("https://example.com/no-such-whitelist-file-abc.txt");
         expect(res.status).toBe(404);
@@ -18,7 +18,7 @@ describe("global catch — FIX-01 防御性回归", () => {
         expect(body).not.toMatch(/Error:/i);
     });
 
-    it("GitHub 代理 fetch 异常时应由 catch 兜底返回固定文案", async () => {
+    it("GitHub proxy fetch failure should be caught and return fixed message", async () => {
         // 插入一个白名单条目，再让 fetch 抛错 → handleGitHubFileProxy 的 fetch 步骤抛错
         // → 全局 catch 拦截 → 返回固定文案 "服务器内部错误，请稍后重试。"
         await env.WUYA.prepare(

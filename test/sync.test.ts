@@ -169,7 +169,7 @@ describe("syncSingleIpSource (Task 2.1 is_enabled 守卫)", () => {
 });
 
 describe("syncSystemDomains (FIX-02: 错误日志替代静默)", () => {
-    it("syncDomainLogic 抛错时 D1 写入 failed 状态，且日志输出可定位失败域名", async () => {
+    it("syncDomainLogic throw: D1 writes failed status, log identifies failing domain", async () => {
         // 插入一个启用系统域名，source_domain 设为 internal:hostmonit:CM
         // last_synced_records 设为非空：模拟"上次曾成功同步过"，这样上游失败返回 [] 时
         // 走 syncDomainLogic 的 lastRecords.length > 0 分支 → 抛"上次曾有记录" → D1 写入 failed
@@ -202,7 +202,7 @@ describe("syncSystemDomains (FIX-02: 错误日志替代静默)", () => {
 });
 
 describe("syncDomainLogic JSON 兜底 (FIX-03)", () => {
-    it("last_synced_records JSON 损坏时不抛 SyntaxError，按空数组处理", async () => {
+    it("corrupt last_synced_records JSON: no SyntaxError, treated as empty array", async () => {
         // 插入一个上次记录被破坏的 domain
         // is_deep_resolve=1 + 不存在源 → DoH 返回空 → recordsToUpdate.length === 0
         // → 进入 lastRecords 分支 → JSON.parse('{broken-json') 损坏 → 期望 catch 兜底

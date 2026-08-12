@@ -66,7 +66,7 @@ describe("/api/login 限流 (FIX-05)", () => {
         ]);
     });
 
-    it("连续 5 次错误密码：第 6 次返回 429", async () => {
+    it("6th wrong-password attempt within window returns 429", async () => {
         const wrongBody = JSON.stringify({ password: "definitely-wrong" });
         const opts = {
             method: "POST",
@@ -91,7 +91,7 @@ describe("/api/login 限流 (FIX-05)", () => {
         expect(cnt.n).toBe(5);
     });
 
-    it("成功登录后清理该 IP 的失败记录（首次成功后再错 5 次仍能再次触发限流）", async () => {
+    it("successful login clears prior failures for that IP (new 5 wrong attempts re-trigger throttle)", async () => {
         const wrongBody = JSON.stringify({ password: "wrong" });
         const opts = {
             method: "POST",
@@ -283,7 +283,7 @@ describe("POST /api/settings (Task 2.6 白名单 + 配对验证)", () => {
         expect(legit.value).toBe("wetest.vip");
     });
 
-    it("null 值正确清除字段（P1-4）", async () => {
+    it("null value correctly clears the field (P1-4)", async () => {
         const cookie = await loginAndGetCookie();
         // 先写入一个值
         await env.WUYA.prepare(

@@ -51,8 +51,8 @@ afterEach(async () => {
     await env.WUYA.prepare("DELETE FROM settings WHERE key = 'BATCH_SIZE'").run();
 });
 
-describe("syncScheduledDomains 批量执行", () => {
-    it("同步确实执行：域名状态由 pending 写为 success（TDZ 回归）", async () => {
+describe("syncScheduledDomains batch execution", () => {
+    it("sync runs: domain status transitions pending to success (TDZ regression)", async () => {
         await seedDomains([{ target: "a.example.com" }]);
         stubHappyPathFetch();
 
@@ -66,7 +66,7 @@ describe("syncScheduledDomains 批量执行", () => {
         expect(row.last_sync_status).toBe("success");
     });
 
-    it("BATCH_SIZE=2 时只处理 2 条，其余保持 pending", async () => {
+    it("BATCH_SIZE=2 only processes 2 rows, rest stay pending", async () => {
         await env.WUYA.prepare(
             "INSERT INTO settings (key, value) VALUES ('BATCH_SIZE', '2') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         ).run();
@@ -88,7 +88,7 @@ describe("syncScheduledDomains 批量执行", () => {
         expect(byStatus.pending).toBe(2);
     });
 
-    it("BATCH_SIZE 非法值（非数字）回退为默认 10", async () => {
+    it("invalid BATCH_SIZE (non-numeric) falls back to default 10", async () => {
         await env.WUYA.prepare(
             "INSERT INTO settings (key, value) VALUES ('BATCH_SIZE', 'not-a-number') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         ).run();
@@ -104,7 +104,7 @@ describe("syncScheduledDomains 批量执行", () => {
         expect(row.n).toBe(10);
     });
 
-    it("失败优先：failed 状态的域名排在 pending 之前被取走", async () => {
+    it("failure-first: failed domains picked before pending ones", async () => {
         await env.WUYA.prepare(
             "INSERT INTO settings (key, value) VALUES ('BATCH_SIZE', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         ).run();
@@ -128,7 +128,7 @@ describe("syncScheduledDomains 批量执行", () => {
         expect(pending.last_sync_status).toBe("pending");  // 未轮到
     });
 
-    it("单个域名同步失败不中断整批", async () => {
+    it("single domain failure does not abort the batch", async () => {
         await seedDomains([{ target: "d1.example.com" }, { target: "d2.example.com" }]);
         // d1 的 DoH 查询失败，d2 正常
         vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -148,7 +148,7 @@ describe("syncScheduledDomains 批量执行", () => {
         expect(d2.last_sync_status).toBe("success");
     });
 
-    it("缺少 CF 凭据时安全退出，不改动任何域名状态", async () => {
+    it("missing CF credentials safely exit without mutating domain state", async () => {
         await env.WUYA.prepare("DELETE FROM settings WHERE key IN ('CF_API_TOKEN', 'CF_ZONE_ID')").run();
         await seedDomains([{ target: "e1.example.com" }]);
 
