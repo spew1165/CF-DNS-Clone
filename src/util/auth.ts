@@ -63,6 +63,9 @@ export async function verifyPassword(password: string, storedHash: string, legac
         if (parts.length !== 4) return { matched: false };
         const [, iterStr, salt, hex] = parts;
         const iterations = Number(iterStr);
+        if (!Number.isInteger(iterations) || iterations < 1000 || iterations > 10_000_000) {
+            return { matched: false };
+        }
         const encoder = new TextEncoder();
         const keyMaterial = await crypto.subtle.importKey('raw', encoder.encode(password), 'PBKDF2', false, ['deriveBits']);
         const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: encoder.encode(salt), iterations, hash: 'SHA-256' }, keyMaterial, 256);
