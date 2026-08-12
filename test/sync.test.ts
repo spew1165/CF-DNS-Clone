@@ -4,7 +4,7 @@
 import { env } from "cloudflare:test";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { fetchIpsFromSource, syncSingleIpSource, FETCH_STRATEGIES } from "../src/sync/ip-sources.ts";
-import { syncDomainLogic, syncSystemDomains, resolveRecordsForDomain } from "../src/sync/domains.ts";
+import { syncDomainLogic, syncSystemDomains, resolveRecordsForDomain, processInChunks } from "../src/sync/domains.ts";
 
 afterEach(() => {
     vi.unstubAllGlobals();
@@ -402,5 +402,53 @@ describe("resolveRecordsForDomain (FIX-14)", () => {
         };
 
         await expect(resolveRecordsForDomain(domain, env.WUYA, () => {}, {})).rejects.toThrow(/network boom/);
+    });
+});
+
+describe("processInChunks 短路行为 (P1-3)", () => {
+    it("fulfilled 但非 2xx 立即抛错，短路后续批次", async () => {
+        const calls: string[] = [];
+        const items = ["a", "b", "c", "d", "e"];
+        const processFn = async (item: string): Promise<Response> => {
+            calls.push(item);
+            if (item === "a") {
+                return new Response(JSON.stringify({ errors: [{ code: 10000, message: "Authentication error" }] }), {
+                    status: 401,
+                    headers: { "Content-Type": "application/json" },
+                });
+            }
+            return new Response("ok", { status: 200 });
+        };
+        const noopLog = () => {};
+        // chunkSize=2 → 批次 1 (a,b) a 失败应抛错，批次 2 (c,d,e) 不应被调用
+        await expect(processInChunks(items, 2, processFn, noopLog)).rejects.toThrow(/Cloudflare API 失败/);
+        // 后续批次绝不应被处理
+        expect(calls).not.toContain("c");
+        expect(calls).not.toContain("d");
+        expect(calls).not.toContain("e");
+        // a 必须被调用一次
+        expect(calls.filter(x => x === "a")).toHaveLength(1);
+    });
+
+    it("所有项成功时主动消费 body 并返回响应数组", async () => {
+        const items = [1, 2, 3];
+        const processFn = async (n: number): Promise<Response> => new Response(`ok-${n}`, { status: 200 });
+        const noopLog = () => {};
+        const results = await processInChunks(items, 2, processFn, noopLog);
+        expect(results).toHaveLength(3);
+        // 每个 Response 的 body 已被消费（arrayBuffer 已读）
+        for (const res of results) {
+            expect(res.bodyUsed).toBe(true);
+        }
+    });
+
+    it("rejected 的 promise 收集后聚合抛错", async () => {
+        const items = ["x", "y"];
+        const processFn = async (item: string): Promise<Response> => {
+            if (item === "y") throw new Error("network boom");
+            return new Response("ok", { status: 200 });
+        };
+        const noopLog = () => {};
+        await expect(processInChunks(items, 5, processFn, noopLog)).rejects.toThrow(/network boom/);
     });
 });

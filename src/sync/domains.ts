@@ -269,8 +269,13 @@ export async function resolveRecursively(domain: string, log: LogFn, depth = 0):
     return [...validIPv4s.map(ip => ({ type: 'A', content: ip })), ...validIPv6s.map(ip => ({ type: 'AAAA', content: ip }))];
 }
 
-/** 分块并发处理（每块 Promise.allSettled，收集错误后汇总） */
-export async function processInChunks<T, R>(items: T[], chunkSize: number, processFn: (item: T) => Promise<R>, log: LogFn): Promise<R[]> {
+/**
+ * 分块并发处理（每块 Promise.allSettled）。
+ * - fulfilled 且 `res.ok === false` 时立即抛错，短路后续批次，避免连接池与配额浪费
+ * - fulfilled 时主动消费 body（arrayBuffer）释放连接到连接池
+ * - 所有失败的 promise 收集后聚合抛错
+ */
+export async function processInChunks<T, R extends Response>(items: T[], chunkSize: number, processFn: (item: T) => Promise<R>, log: LogFn): Promise<R[]> {
     const allResponses: R[] = [];
     const errors: Error[] = [];
     for (let i = 0; i < items.length; i += chunkSize) {
@@ -279,7 +284,16 @@ export async function processInChunks<T, R>(items: T[], chunkSize: number, proce
         const settled = await Promise.allSettled(chunk.map(processFn));
         for (const s of settled) {
             if (s.status === 'fulfilled') {
-                allResponses.push(s.value);
+                const res = s.value;
+                if (!res.ok) {
+                    // 早失败早退出：消费错误体后立即抛错，短路后续批次
+                    const errBody = await res.json().catch(() => ({})) as { errors?: { code: number; message: string }[] };
+                    const detail = (errBody.errors || []).map(e => `(Code ${e.code}: ${e.message})`).join(', ');
+                    throw new Error(`Cloudflare API 失败: ${res.status} ${detail}`);
+                }
+                // 主动消费 body 释放连接到连接池
+                await res.arrayBuffer();
+                allResponses.push(res);
             } else {
                 errors.push(s.reason instanceof Error ? s.reason : new Error(String(s.reason)));
             }
@@ -352,14 +366,6 @@ export async function updateCloudflareDns(token: string, zoneId: string, domain:
     const deleteResponses = await processInChunks(recordsToDelete, API_CHUNK_SIZE, deleteFn, log);
     const addResponses = await processInChunks(recordsToAdd, API_CHUNK_SIZE, addFn, log);
 
-    const responses = [...deleteResponses, ...addResponses];
-    for (const res of responses) {
-        if (!res.ok) {
-            const errorBody = await res.json().catch(() => ({ errors: [{ code: 9999, message: 'Unknown error' }] })) as { errors?: { code: number; message: string }[] };
-            const errorMessage = (errorBody.errors || []).map(e => `(Code ${e.code}: ${e.message})`).join(', ');
-            log(`一个API调用失败: ${res.status} - ${errorMessage}`);
-            if (errorMessage) throw new Error(`Cloudflare API操作失败: ${errorMessage}`);
-        }
-    }
+    // processInChunks 已在内部对非 2xx 短路抛错；此处仅做防御性聚合
     return 'success';
 }
