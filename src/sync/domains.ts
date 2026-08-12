@@ -4,7 +4,6 @@
 import { getSetting, getCfApiSettings, queryAll } from '../db/client.ts';
 import { fetchThreeNetworkIps } from './ip-sources.ts';
 import { beijingTimeLog } from '../util/log.ts';
-import { createLogStreamResponse } from '../util/sse.ts';
 import { runWithOptionalLog } from '../util/run-with-log.ts';
 import { fetchWithTimeout, fetchWithRetry } from '../util/fetch.ts';
 
@@ -126,10 +125,7 @@ export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: bool
         log("所有目标同步任务执行完毕。");
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
-
-    const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
-    await syncLogic(noOpLog);
+    return runWithOptionalLog(syncLogic, returnLogs, signal);
 }
 
 /** 批量同步系统预设域名 */
@@ -156,10 +152,7 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
         log("系统域名同步任务执行完毕。");
     };
 
-    if (returnLogs) return createLogStreamResponse(syncLogic, signal);
-
-    const noOpLog: LogFn = (msg) => console.log(beijingTimeLog(msg));
-    await syncLogic(noOpLog);
+    return runWithOptionalLog(syncLogic, returnLogs, signal);
 }
 
 /**
