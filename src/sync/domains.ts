@@ -24,6 +24,19 @@ interface DnsRecord {
     content: string;
 }
 
+/** 三网聚合优选 IP 缓存：移动/电信/联通 IP 列表 + 来源标识 */
+interface ThreeNetworkIpsCache {
+    yd: string[];
+    dx: string[];
+    lt: string[];
+    source: string;
+}
+
+/** 域名同步共享上下文：跨多个域名同步时复用的派生状态 */
+interface SyncContext {
+    threeNetworkIps?: ThreeNetworkIpsCache;
+}
+
 type LogFn = (msg: string) => void;
 
 /** DoH 查询（Cloudflare DNS over HTTPS，JSON 格式） */
@@ -72,7 +85,7 @@ export async function syncScheduledDomains(env: { WUYA: D1Database }): Promise<v
     }
 
     log(`Found ${domainsToSync.length} domains for this sync batch (failure-first).`);
-    const syncContext: Record<string, unknown> = {};
+    const syncContext: SyncContext = {};
     for (const domain of domainsToSync) {
         try {
             await syncDomainLogic(domain, token, zoneId, db, log, syncContext);
@@ -94,7 +107,7 @@ export async function syncSingleDomain(id: number, env: { WUYA: D1Database }, re
             log(`域名 ${domain.target_domain} 已被禁用，跳过同步。`);
             return;
         }
-        const syncContext: Record<string, unknown> = {};
+        const syncContext: SyncContext = {};
         await syncDomainLogic(domain, token, zoneId, db, log, syncContext);
     };
 
@@ -114,7 +127,7 @@ export async function syncAllDomains(env: { WUYA: D1Database }, returnLogs: bool
             return;
         }
         log(`发现 ${domains.length} 个已启用的目标需要同步。`);
-        const syncContext: Record<string, unknown> = {};
+        const syncContext: SyncContext = {};
         for (const domain of domains) {
             try {
                 await syncDomainLogic(domain, token, zoneId, db, log, syncContext);
@@ -141,7 +154,7 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
             return;
         }
         log(`发现 ${domains.length} 个已启用的系统域名需要同步。`);
-        const syncContext: Record<string, unknown> = {};
+        const syncContext: SyncContext = {};
         for (const domain of domains) {
             await syncDomainLogic(domain, token, zoneId, db, log, syncContext).catch(
                 (e) => {
@@ -161,7 +174,7 @@ export async function syncSystemDomains(env: { WUYA: D1Database }, returnLogs: b
  * - is_deep_resolve=1：递归解析 CNAME 链
  * - 否则：浅层克隆（源域名必须是 CNAME）
  */
-export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database, log: LogFn, syncContext: Record<string, unknown>): Promise<DnsRecord[]> {
+export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database, log: LogFn, syncContext: SyncContext): Promise<DnsRecord[]> {
     if (domain.source_domain.startsWith('internal:hostmonit:')) {
         const type = domain.source_domain.split(':')[2];
         const sourceName = await getSetting(db, 'THREE_NETWORK_SOURCE') || 'CloudFlareYes';
@@ -190,7 +203,7 @@ export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database,
         // 若直接 [type] 解引会抛 "Cannot read properties of undefined"。
         // 返回空数组交给 syncDomainLogic 走 "无记录" 分支判定 no_change / 抛错。
         if (!syncContext.threeNetworkIps) return [];
-        const ips = (syncContext.threeNetworkIps as { [k: string]: string[] })[type] || [];
+        const ips = syncContext.threeNetworkIps[type as 'yd' | 'dx' | 'lt'] || [];
         return ips.map(ip => ({ type: 'A', content: ip }));
     }
     if (domain.is_deep_resolve) {
@@ -204,7 +217,7 @@ export async function resolveRecordsForDomain(domain: DomainRow, db: D1Database,
 }
 
 /** 核心同步逻辑：解析 → 比对 → 写回 Cloudflare DNS → 状态更新 */
-export async function syncDomainLogic(domain: DomainRow, token: string, zoneId: string, db: D1Database, log: LogFn, syncContext: Record<string, unknown>): Promise<void> {
+export async function syncDomainLogic(domain: DomainRow, token: string, zoneId: string, db: D1Database, log: LogFn, syncContext: SyncContext): Promise<void> {
     log(`======== 开始同步: ${domain.target_domain} ========`);
     try {
         let recordsToUpdate: DnsRecord[] | undefined;
