@@ -9,12 +9,12 @@ export async function handleGitHubFileProxy(fileName: string, env: { WUYA: D1Dat
     const source = await db.prepare("SELECT * FROM ip_sources WHERE github_path = ?").bind(fileName).first();
 
     if (!source) {
-        return new Response('File not found or not managed by this service.', { status: 404 });
+        return new Response('请求的文件不存在或不在本服务管理范围内。', { status: 404 });
     }
 
     const githubSettings = await getGitHubSettings(db);
     if (!githubSettings.token || !githubSettings.owner || !githubSettings.repo) {
-        return new Response('GitHub settings are not configured on the server.', { status: 500 });
+        return new Response('服务器尚未完成初始化配置。', { status: 500 });
     }
 
     // Cloudflare Workers 运行时的 caches.default（标准 DOM 的 CacheStorage 接口不含此字段）。
@@ -33,7 +33,7 @@ export async function handleGitHubFileProxy(fileName: string, env: { WUYA: D1Dat
         const githubResponse = await fetch(apiUrl, { headers });
 
         if (!githubResponse.ok) {
-            return new Response('Failed to fetch file from GitHub.', { status: githubResponse.status });
+            return new Response('无法获取对应文件，请稍后重试。', { status: githubResponse.status });
         }
 
         response = new Response(githubResponse.body, {
