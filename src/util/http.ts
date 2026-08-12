@@ -15,3 +15,14 @@ export function jsonError(message: string, status = 400, details?: unknown): Res
     if (details !== undefined) body.details = details;
     return jsonResponse(body, status);
 }
+
+/** 从 Cookie 头中按 key 提取 value（找不到返回 null） */
+export function getCookie(request: Request, name: string): string | null {
+    const header = request.headers.get('Cookie');
+    if (!header) return null;
+    for (const raw of header.split(';')) {
+        const [key, value] = raw.trim().split('=');
+        if (key === name) return value ?? null;
+    }
+    return null;
+}

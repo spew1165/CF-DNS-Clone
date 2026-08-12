@@ -3,7 +3,7 @@
 
 import { getSetting, setSetting, getFullSettings, getCfApiSettings, getSafeSettings } from '../db/client.ts';
 import { ensureInitialData } from '../db/migrations.ts';
-import { jsonResponse } from '../util/http.ts';
+import { jsonResponse, getCookie } from '../util/http.ts';
 import { hashPassword, isAuthenticated, verifyPassword } from '../util/auth.ts';
 import { getZoneName } from '../util/cf.ts';
 import { FETCH_STRATEGIES } from '../sync/ip-sources.ts';
@@ -140,12 +140,7 @@ async function apiLogin(request: Request, db: D1Database): Promise<Response> {
 }
 
 async function apiLogout(request: Request, db: D1Database): Promise<Response> {
-  const cookieHeader = request.headers.get('Cookie');
-  let token: string | null = null;
-  if (cookieHeader) for (const cookie of cookieHeader.split(';')) {
-      const [key, value] = cookie.trim().split('=');
-      if (key === 'session') token = value;
-  }
+  const token = getCookie(request, 'session');
   if (token) await db.prepare("DELETE FROM sessions WHERE token = ?").bind(token).run();
   const expiryCookie = 'session=; HttpOnly; Secure; Path=/; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 GMT';
   return jsonResponse({ success: true }, 200, { 'Set-Cookie': expiryCookie });
