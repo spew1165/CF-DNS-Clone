@@ -9,6 +9,10 @@ function escapeHtml(s) {
     }[c]));
 }
 
+/**
+ * 渲染公共 HTML 骨架（DOCTYPE + PicoCSS + FontAwesome + 全局 CSS 变量）
+ * 所有动态值在调用方传入前已经过 escapeHtml；本函数只做字符串拼接。
+ */
 export function getHtmlLayout(title, content) { return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${title}</title><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"><link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"><style>
 :root {
     --sidebar-width: 250px;
@@ -232,6 +236,10 @@ legend { font-size: 1.25rem; font-weight: 600; padding: 0 .5rem; }
 
 export function getSetupPage() { return `<div class="auth-container"><article id="setupForm"><h1>系统初始化</h1><p>请设置一个安全的管理员密码以保护您的应用。</p><form><label for="password">管理员密码 (最少8位)</label><input type="password" id="password" required minlength="8"><button type="submit">设置密码</button></form><p id="error-msg" style="color:red"></p></article></div><script>document.querySelector('#setupForm form').addEventListener('submit',async function(e){e.preventDefault();const password=document.getElementById('password').value;document.getElementById('error-msg').textContent='';try{const res=await fetch('/api/setup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});if(!res.ok){const err=await res.json();throw new Error(err.error||'设置失败')}alert('设置成功，页面即将刷新...');setTimeout(()=>window.location.reload(),1000)}catch(e){document.getElementById('error-msg').textContent=e.message}});</script>`;}
 
+/**
+ * 渲染公开首页（无需鉴权）：仅展示启用且同步成功的域名/IP 源卡片
+ * 入参全部来自 D1，所有用户控制字段在模板内统一通过 escapeHtml 包裹
+ */
 export function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSourceName, loggedIn) {
     const origin = new URL(requestUrl).origin;
     const formatTime = (isoStr) => {
@@ -406,6 +414,10 @@ export function getPublicHomepage(requestUrl, domains, ipSources, threeNetworkSo
     </script>
     `;
 }
+/**
+ * 渲染已登录管理员的仪表盘页面骨架（含域名/IP 源表格 + 设置面板）
+ * settings 必须是已过滤敏感字段的安全版本（getSafeSettings）
+ */
 export function getDashboardPage(domains, ipSources, settings) { 
     const githubSettingsComplete = settings.GITHUB_TOKEN && settings.GITHUB_OWNER && settings.GITHUB_REPO;
     return `<aside class="sidebar"><div class="sidebar-header"><h3>DNS Clone</h3></div><nav class="sidebar-nav"><a href="#page-dns-clone" class="nav-link active" data-target="page-dns-clone"><i class="fa-solid fa-clone fa-fw"></i> 域名克隆</a><a href="#page-github-upload" class="nav-link" data-target="page-github-upload"><i class="fa-brands fa-github fa-fw"></i> GitHub 上传</a><a href="#page-settings" class="nav-link" data-target="page-settings"><i class="fa-solid fa-gear fa-fw"></i> 系统设置</a></nav></aside>
@@ -439,6 +451,10 @@ export function getDashboardPage(domains, ipSources, settings) {
     <dialog id="ipSourceModal"><article><header><a href="#close" aria-label="Close" class="close" onclick="window.closeModal('ipSourceModal')"></a><h3 id="ipSourceModalTitle"></h3></header><form id="ipSourceForm"><input type="hidden" id="ipSourceId"><div class="grid"><label for="ip_source_url">IP源地址</label><button type="button" class="outline" id="probeBtn" style="width:auto;padding:0 1rem;">探测方案</button></div><input type="text" id="ip_source_url" placeholder="https://example.com/ip_list.txt" required><progress id="probeProgress" style="display:none;"></progress><p id="probeResult" style="font-size:0.9em;"></p><label for="github_path">GitHub 文件路径</label><input type="text" id="github_path" placeholder="IP/Cloudflare.txt" required><label for="commit_message">Commit 信息</label><input type="text" id="commit_message" placeholder="Update Cloudflare IPs" required><footer><button type="button" class="secondary" onclick="window.closeModal('ipSourceModal')">取消</button><button type="submit" id="saveIpSourceBtn">保存</button></footer></form></article></dialog>
     <script>${getDashboardScript(domains, ipSources, settings)}</script>`;
 }
+/**
+ * 渲染仪表盘浏览器端脚本（API 调用 / 流式同步 / 主题切换等）
+ * 模板字符串中的 settings 仅渲染为可读视图，敏感字段已被剔除
+ */
 function getDashboardScript(domains, ipSources, settings) { return `
   function showNotification(message, type = 'info', duration = 5000) {
       const container = document.getElementById('notifications');
