@@ -21,6 +21,13 @@ const ALLOWED_SETTINGS_KEYS = new Set([
     'THREE_NETWORK_SOURCE',
 ]);
 
+/** 检测 D1/SQLite UNIQUE 约束违例（D1 同时支持 message 与 code 两种错误呈现方式） */
+const isUniqueViolation = (e: unknown): boolean =>
+    e instanceof Error && (
+        /UNIQUE constraint failed/i.test(e.message) ||
+        /SQLITE_CONSTRAINT/i.test(e.message)
+    );
+
 /** API 路由分发 */
 export async function handleApiRequest(request: Request, env: { WUYA: D1Database }): Promise<Response> {
   const url = new URL(request.url);
@@ -238,7 +245,7 @@ async function handleDomainMutation(request: Request, db: D1Database, isUpdate =
           .bind(source_domain, target_domain, zoneId, is_deep_resolve ?? 1, ttl ?? 60, notes || null).run();
       return jsonResponse({ success: true, message: '目标添加成功。' });
   } catch (e) {
-      if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) return jsonResponse({ error: '目标域名已存在。' }, 409);
+      if (isUniqueViolation(e)) return jsonResponse({ error: '目标域名已存在。' }, 409);
       throw e;
   }
 }
@@ -292,7 +299,7 @@ async function apiAddIpSource(request: Request, db: D1Database): Promise<Respons
             .bind(url, github_path, commit_message, fetch_strategy).run();
         return jsonResponse({ success: true, message: 'IP源添加成功。' });
     } catch (e) {
-        if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) return jsonResponse({ error: '该URL或GitHub文件路径已存在。' }, 409);
+        if (isUniqueViolation(e)) return jsonResponse({ error: '该URL或GitHub文件路径已存在。' }, 409);
         throw e;
     }
 }
@@ -314,7 +321,7 @@ async function apiUpdateIpSource(request: Request, db: D1Database, id: number): 
             .bind(url, github_path, commit_message, fetch_strategy, id).run();
         return jsonResponse({ success: true, message: 'IP源更新成功。' });
     } catch (e) {
-        if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) return jsonResponse({ error: '该URL或GitHub文件路径已存在。' }, 409);
+        if (isUniqueViolation(e)) return jsonResponse({ error: '该URL或GitHub文件路径已存在。' }, 409);
         throw e;
     }
 }
