@@ -2,7 +2,15 @@
 // 中文注释；断言文案用英文（文案三档规则）
 import { env } from "cloudflare:test";
 import { describe, it, expect } from "vitest";
-import { hashPassword, isAuthenticated, legacyHashPassword, verifyPassword } from "../src/util/auth.ts";
+import { hashPassword, isAuthenticated, verifyPassword } from "../src/util/auth.ts";
+
+/** 自构造 legacy `raw$<hex>` 哈希（auth.ts 不再导出 legacyHashPassword） */
+async function makeLegacyHash(password: string, salt: string): Promise<string> {
+    const data = new TextEncoder().encode(password + salt);
+    const buf = await crypto.subtle.digest('SHA-256', data);
+    const hex = Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return `raw$${hex}`;
+}
 
 describe("hashPassword (PBKDF2)", () => {
     it("returns a prefixed string containing salt and hex", async () => {
@@ -33,7 +41,7 @@ describe("verifyPassword (multi-format)", () => {
 
     it("accepts legacy raw$ SHA-256 format and returns upgraded hash", async () => {
         const legacySalt = "old-salt";
-        const legacyHash = await legacyHashPassword("test-password-123", legacySalt);
+        const legacyHash = await makeLegacyHash("test-password-123", legacySalt);
         const result = await verifyPassword("test-password-123", legacyHash, legacySalt);
         expect(result.matched).toBe(true);
         expect(result.upgradedHash).toMatch(/^pbkdf2\$100000\$/);
@@ -46,7 +54,7 @@ describe("verifyPassword (multi-format)", () => {
     });
 
     it("rejects wrong password for legacy", async () => {
-        const legacyHash = await legacyHashPassword("correct", "old-salt");
+        const legacyHash = await makeLegacyHash("correct", "old-salt");
         const result = await verifyPassword("wrong", legacyHash, "old-salt");
         expect(result.matched).toBe(false);
     });

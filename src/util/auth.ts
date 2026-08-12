@@ -42,8 +42,9 @@ export async function hashPassword(password: string, salt: string): Promise<stri
 /**
  * legacy 哈希：单轮 SHA-256（与原 index.legacy.js 同算法）
  * 仅供密码登录时回退验证；登录成功后立即升级为 PBKDF2
+ * 不导出：测试可通过 `raw$` 前缀 + crypto.subtle.digest 自构造
  */
-export async function legacyHashPassword(password: string, salt: string): Promise<string> {
+async function legacyHashPassword(password: string, salt: string): Promise<string> {
     const encoder = new TextEncoder();
     const data = encoder.encode(password + salt);
     const buf = await crypto.subtle.digest('SHA-256', data);
